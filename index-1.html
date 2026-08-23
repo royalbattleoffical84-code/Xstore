@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xstore — Learn. Code. Build.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6983182422209193" crossorigin="anonymous"></script>
+<script src="https://zapupi.com/single-html-web-kit.js"></script>
+<style>
+  :root{
+    --bg:#0a0e14;
+    --bg-panel:#10151d;
+    --bg-card:#141a24;
+    --border:#212936;
+    --text:#e6ebf2;
+    --text-dim:#8a96a8;
+    --accent:#00f0d8;
+    --accent-dim:#0a4a44;
+    --accent-glow: rgba(0,240,216,0.15);
+    --danger:#ff5c7a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Space Grotesk',sans-serif;
+    min-height:100vh;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* Header */
+  header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:20px 32px;
+    border-bottom:1px solid var(--border);
+    position:sticky;top:0;background:rgba(10,14,20,0.9);backdrop-filter:blur(10px);
+    z-index:50;
+  }
+  .logo{
+    font-size:22px;font-weight:700;letter-spacing:-0.5px;
+    display:flex;align-items:center;gap:2px;
+  }
+  .logo .x{
+    color:var(--accent);
+    text-shadow:0 0 20px var(--accent-glow);
+  }
+
+  /* Hero */
+  .hero{
+    padding:64px 32px 32px;
+    max-width:1100px;margin:0 auto;
+  }
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:12px;
+    letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .eyebrow::before{content:"";width:8px;height:8px;background:var(--accent);border-radius:50%;box-shadow:0 0 12px var(--accent);}
+  .hero h1{
+    font-size:clamp(32px,5vw,52px);font-weight:700;line-height:1.05;letter-spacing:-1.5px;
+    max-width:700px;
+  }
+  .hero p{
+    color:var(--text-dim);font-size:16px;margin-top:16px;max-width:520px;line-height:1.6;
+  }
+
+  /* Category filter bar */
+  .cat-bar{
+    max-width:1100px;margin:0 auto;padding:0 32px 32px;
+    display:flex;gap:10px;flex-wrap:wrap;
+    border-bottom:1px solid var(--border);
+  }
+  .cat-chip{
+    font-family:'JetBrains Mono',monospace;font-size:12px;
+    background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);
+    padding:8px 16px;border-radius:20px;cursor:pointer;transition:all .2s;
+    white-space:nowrap;
+  }
+  .cat-chip:hover{border-color:var(--accent);color:var(--text);}
+  .cat-chip.active{background:var(--accent);border-color:var(--accent);color:#04140f;font-weight:600;}
+
+  /* Course grid */
+  .section{max-width:1100px;margin:0 auto;padding:48px 32px;}
+  .section-title{
+    font-size:13px;font-family:'JetBrains Mono',monospace;color:var(--text-dim);
+    text-transform:uppercase;letter-spacing:1.5px;margin-bottom:20px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  .grid{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px;
+  }
+  .card{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+    overflow:hidden;cursor:pointer;transition:border-color .2s,transform .2s;
+    display:flex;flex-direction:column;
+  }
+  .card:hover{border-color:var(--accent);transform:translateY(-2px);}
+  .thumb{
+    aspect-ratio:16/9;background:linear-gradient(135deg,#141a24,#1a2230);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--accent);font-size:32px;position:relative;
+  }
+  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .thumb .play-badge{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:rgba(10,14,20,0.3);opacity:0;transition:opacity .2s;
+  }
+  .card:hover .play-badge{opacity:1;}
+  .card-body{padding:16px;flex:1;display:flex;flex-direction:column;gap:6px;}
+  .card-cat{
+    font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);
+    text-transform:uppercase;letter-spacing:1px;
+  }
+  .card-title{font-weight:600;font-size:15px;line-height:1.3;}
+  .card-desc{color:var(--text-dim);font-size:13px;line-height:1.5;flex:1;}
+  .card-meta{
+    font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);
+    margin-top:4px;
+  }
+  .empty-state{
+    text-align:center;padding:60px 20px;color:var(--text-dim);
+    border:1px dashed var(--border);border-radius:10px;
+  }
+
+  /* Modal / player */
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(6,8,12,0.85);backdrop-filter:blur(4px);
+    display:none;align-items:center;justify-content:center;z-index:100;padding:20px;
+  }
+  .modal-overlay.active{display:flex;}
+  .modal{
+    background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;
+    max-width:820px;width:100%;max-height:90vh;overflow-y:auto;
+  }
+  .modal-header{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:20px 24px;border-bottom:1px solid var(--border);
+  }
+  .modal-header h2{font-size:18px;font-weight:600;}
+  .close-btn{
+    background:none;border:1px solid var(--border);color:var(--text-dim);
+    width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .close-btn:hover{border-color:var(--danger);color:var(--danger);}
+  .video-wrap{
+    position:relative;width:100%;aspect-ratio:16/9;background:#000;
+    -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+  }
+  .video-wrap iframe,.video-wrap video{
+    position:absolute;inset:0;width:100%;height:100%;border:none;
+  }
+  .video-wrap video{object-fit:contain;background:#000;pointer-events:auto;}
+  .cp-controls{
+    position:absolute;left:0;right:0;bottom:0;padding:10px 12px 8px;
+    background:linear-gradient(transparent,rgba(0,0,0,0.75));
+    display:flex;align-items:center;gap:10px;opacity:1;transition:opacity .25s;
+  }
+  .video-wrap.cp-idle .cp-controls{opacity:0;pointer-events:none;}
+  .cp-btn{
+    background:none;border:none;color:#fff;cursor:pointer;padding:4px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .cp-btn svg{width:20px;height:20px;}
+  .cp-progress{
+    flex:1;height:4px;background:rgba(255,255,255,0.25);border-radius:2px;
+    position:relative;cursor:pointer;
+  }
+  .cp-progress-fill{
+    position:absolute;left:0;top:0;height:100%;background:var(--accent);border-radius:2px;width:0%;
+  }
+  .cp-time{color:#fff;font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap;}
+  .cp-center-play{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;background:rgba(0,0,0,0.15);
+  }
+  .cp-center-play .circle{
+    width:60px;height:60px;border-radius:50%;background:rgba(0,240,216,0.9);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .video-wrap:fullscreen{aspect-ratio:auto;}
+  .video-wrap:fullscreen video{object-fit:contain;}
+  .modal-body{padding:24px;}
+  .modal-desc{color:var(--text-dim);font-size:14px;line-height:1.6;margin-bottom:20px;}
+  .file-list{display:flex;flex-direction:column;gap:10px;}
+  .file-item{
+    display:flex;align-items:center;gap:12px;
+    background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+    padding:12px 16px;
+  }
+  .file-item .file-icon{color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:13px;}
+  .file-item .file-name{flex:1;font-size:14px;word-break:break-word;}
+  .file-item a{
+    background:var(--accent);color:#04140f;text-decoration:none;font-weight:600;
+    font-size:13px;padding:8px 14px;border-radius:6px;white-space:nowrap;
+  }
+  .file-item a:hover{opacity:0.85;}
+
+  footer{
+    text-align:center;padding:32px;color:var(--text-dim);font-size:13px;
+    border-top:1px solid var(--border);
+  }
+
+  .loading{
+    text-align:center;padding:40px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-size:13px;
+  }
+
+  /* Ad slots */
+  .ad-slot{max-width:1100px;margin:0 auto;padding:0 32px;}
+  .ad-slot-inner{
+    background:var(--bg-panel);border:1px solid var(--border);border-radius:10px;
+    padding:12px;overflow:hidden;min-height:60px;display:flex;align-items:center;justify-content:center;
+  }
+  .ad-label{
+    text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);
+    letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;opacity:0.6;
+  }
+  .ad-slot-full{margin:36px auto;}
+  .ad-slot:empty, .ad-slot-full:has(.ad-slot-inner:empty){display:none;}
+
+  /* Auth */
+  .auth-area{display:flex;align-items:center;gap:10px;}
+  .auth-btn{
+    background:transparent;border:1px solid var(--border);color:var(--text);
+    font-family:'Space Grotesk',sans-serif;font-size:13px;padding:8px 16px;
+    border-radius:8px;cursor:pointer;transition:border-color .2s;
+  }
+  .auth-btn:hover{border-color:var(--accent);}
+  .auth-btn.primary{background:var(--accent);color:#04140f;border-color:var(--accent);font-weight:600;}
+  .user-chip{
+    font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-dim);
+    display:flex;align-items:center;gap:8px;
+  }
+
+  .auth-modal .modal{max-width:380px;}
+  .auth-modal .modal-body{padding:28px 24px;}
+  .auth-field{
+    width:100%;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+    padding:12px 14px;color:var(--text);font-family:'Space Grotesk',sans-serif;font-size:14px;
+    margin-bottom:14px;
+  }
+  .auth-field:focus{outline:none;border-color:var(--accent);}
+  .auth-submit{
+    width:100%;background:var(--accent);color:#04140f;border:none;border-radius:8px;
+    padding:12px;font-weight:700;font-size:14px;cursor:pointer;margin-top:4px;
+  }
+  .auth-switch{text-align:center;font-size:13px;color:var(--text-dim);margin-top:16px;}
+  .auth-switch a{color:var(--accent);cursor:pointer;text-decoration:none;}
+  .auth-err{color:var(--danger);font-size:12px;margin-top:8px;display:none;}
+
+  /* Price badge & buy */
+  .price-badge{
+    font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;
+    padding:3px 9px;border-radius:12px;display:inline-block;width:fit-content;
+  }
+  .price-badge.free{background:rgba(0,240,216,0.1);color:var(--accent);}
+  .price-badge.paid{background:rgba(255,184,0,0.12);color:#ffb800;}
+  .buy-box{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+    padding:18px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:16px;
+  }
+  .buy-box .price-tag{font-size:22px;font-weight:700;}
+  .buy-box .price-tag span{font-size:13px;color:var(--text-dim);font-weight:400;margin-left:6px;}
+  .buy-btn{
+    background:var(--accent);color:#04140f;border:none;border-radius:8px;
+    padding:12px 24px;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap;
+    font-family:'Space Grotesk',sans-serif;
+  }
+  .buy-btn:hover{opacity:0.88;}
+  .buy-btn:disabled{opacity:0.5;cursor:not-allowed;}
+  .locked-note{
+    display:flex;align-items:center;gap:10px;color:var(--text-dim);font-size:13px;
+    padding:14px;border:1px dashed var(--border);border-radius:8px;
+  }
+
+  /* Developer section */
+  .dev-section{
+    max-width:1100px;margin:24px auto 0;padding:0 32px;
+  }
+  .dev-card{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:12px;
+    padding:20px;display:flex;gap:16px;align-items:flex-start;
+  }
+  .dev-card img{
+    width:64px;height:64px;border-radius:10px;object-fit:cover;flex-shrink:0;
+    border:1px solid var(--border);
+  }
+  .dev-card .dev-text{
+    color:var(--text-dim);font-size:14px;line-height:1.6;white-space:pre-wrap;
+  }
+  .dev-card .dev-label{
+    font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);
+    text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;display:block;
+  }
+  .dev-card{flex-wrap:wrap;}
+  .dev-card .dev-body{flex:1;min-width:200px;}
+  .dev-video-wrap{
+    width:100%;margin-top:14px;
+  }
+
+  /* Bottom nav bar */
+  body{padding-bottom:76px;}
+  .bottom-nav{
+    position:fixed;left:0;right:0;bottom:0;z-index:60;
+    display:flex;justify-content:space-around;align-items:center;
+    background:rgba(10,14,20,0.95);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);
+    padding:8px 6px calc(8px + env(safe-area-inset-bottom));
+  }
+  .nav-btn{
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+    background:none;border:none;color:var(--text-dim);cursor:pointer;
+    font-family:'Space Grotesk',sans-serif;font-size:11px;padding:6px 14px;
+    border-radius:10px;transition:color .2s,background .2s;flex:1;max-width:110px;
+  }
+  .nav-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;}
+  .nav-btn.active{color:var(--accent);}
+  .nav-btn.active svg{filter:drop-shadow(0 0 6px var(--accent-glow));}
+  .nav-btn:hover{color:var(--text);}
+
+  /* Page sections (SPA views) */
+  .page-view{display:none;}
+  .page-view.active{display:block;}
+
+  /* Search page */
+  .search-bar-wrap{max-width:1100px;margin:0 auto;padding:20px 32px 0;}
+  .search-input{
+    width:100%;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+    padding:14px 16px;color:var(--text);font-family:'Space Grotesk',sans-serif;font-size:15px;
+  }
+  .search-input:focus{outline:none;border-color:var(--accent);}
+  .search-hint{color:var(--text-dim);font-size:12px;margin-top:10px;font-family:'JetBrains Mono',monospace;}
+
+  /* Files page */
+  .files-page-list{display:flex;flex-direction:column;gap:14px;}
+  .file-group{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px;
+  }
+  .file-group-head{
+    display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;
+  }
+  .file-group-title{font-weight:600;font-size:15px;}
+  .file-group-lock{
+    font-family:'JetBrains Mono',monospace;font-size:10px;text-transform:uppercase;
+    padding:3px 9px;border-radius:12px;letter-spacing:0.5px;
+  }
+  .file-group-lock.unlocked{background:rgba(0,240,216,0.1);color:var(--accent);}
+  .file-group-lock.locked{background:rgba(255,92,122,0.1);color:var(--danger);}
+
+  /* Profile page */
+  .profile-card{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:12px;
+    padding:22px;margin-bottom:20px;
+  }
+  .profile-row{
+    display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:12px 0;border-bottom:1px solid var(--border);
+  }
+  .profile-row:last-child{border-bottom:none;}
+  .profile-label{color:var(--text-dim);font-size:13px;}
+  .profile-value{font-weight:600;font-size:14px;word-break:break-all;text-align:right;}
+  .purchase-item{
+    display:flex;justify-content:space-between;align-items:center;
+    background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;
+    padding:12px 14px;margin-bottom:10px;
+  }
+  .purchase-item .p-title{font-size:14px;font-weight:600;}
+  .purchase-item .p-meta{font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;margin-top:3px;}
+  .purchase-item .p-amount{font-family:'JetBrains Mono',monospace;color:var(--accent);font-weight:600;}
+  .signed-out-note{
+    text-align:center;padding:50px 20px;color:var(--text-dim);
+  }
+  .signed-out-note .auth-btn{margin-top:16px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span class="x">X</span>store</div>
+  <div class="auth-area" id="authArea">
+    <button class="auth-btn" id="loginNavBtn">Log In</button>
+  </div>
+</header>
+
+<!-- ============ HOME VIEW ============ -->
+<div class="page-view active" id="view-home">
+
+  <div id="ad-top" class="ad-slot" style="margin-top:20px;"></div>
+
+  <section class="hero">
+    <div class="eyebrow">Courses · Code · Downloads</div>
+    <h1>Learn to build. Get the source code too.</h1>
+    <p>Every course here ships with the full working codebase — watch, download, and build alongside it.</p>
+  </section>
+
+  <div class="cat-bar" id="catBar">
+    <div class="cat-chip active" data-cat="all">All</div>
+  </div>
+
+  <section class="section">
+    <div class="section-title">
+      <span>Courses</span>
+      <span id="courseCount" class="mono"></span>
+    </div>
+    <div id="courseGrid" class="grid">
+      <div class="loading">Loading courses…</div>
+    </div>
+  </section>
+
+  <footer>
+    <span class="mono">Xstore</span> — Built for people who learn by shipping.
+  </footer>
+</div>
+
+<!-- ============ SEARCH VIEW ============ -->
+<div class="page-view" id="view-search">
+  <div class="search-bar-wrap">
+    <input type="text" class="search-input" id="searchInput" placeholder="Search courses by name, category, description…">
+    <div class="search-hint" id="searchHint">Start typing to find a course.</div>
+  </div>
+  <div id="ad-search-top" class="ad-slot" style="margin-top:16px;"></div>
+  <section class="section" style="padding-top:24px;">
+    <div class="section-title">
+      <span>Results</span>
+      <span id="searchCount" class="mono"></span>
+    </div>
+    <div id="searchGrid" class="grid"></div>
+  </section>
+  <div id="ad-search-bottom" class="ad-slot ad-slot-full"></div>
+</div>
+
+<!-- ============ FILES VIEW ============ -->
+<div class="page-view" id="view-files">
+  <div id="ad-files-top" class="ad-slot" style="margin-top:20px;"></div>
+  <section class="section">
+    <div class="section-title">
+      <span>All Course Files</span>
+      <span id="filesCount" class="mono"></span>
+    </div>
+    <div id="filesList" class="files-page-list"></div>
+  </section>
+  <div id="ad-files-bottom" class="ad-slot ad-slot-full"></div>
+</div>
+
+<!-- ============ MY COURSES VIEW ============ -->
+<div class="page-view" id="view-courses">
+  <div id="ad-courses-top" class="ad-slot" style="margin-top:20px;"></div>
+  <section class="section">
+    <div class="section-title">
+      <span>My Courses</span>
+      <span id="myCoursesCount" class="mono"></span>
+    </div>
+    <div id="myCoursesGrid" class="grid"></div>
+  </section>
+  <div id="ad-courses-bottom" class="ad-slot ad-slot-full"></div>
+</div>
+
+<!-- ============ PROFILE VIEW (no ads) ============ -->
+<div class="page-view" id="view-profile">
+  <section class="section" style="padding-top:32px;">
+    <div class="section-title"><span>Profile</span></div>
+    <div id="profileContent"></div>
+  </section>
+</div>
+
+<!-- ============ DEVELOPER VIEW (no ads) ============ -->
+<div class="page-view" id="view-developer">
+  <section class="section" style="padding-top:32px;">
+    <div class="section-title"><span>Developer</span></div>
+    <div id="developerContent"></div>
+  </section>
+</div>
+
+<!-- ============ BOTTOM NAV ============ -->
+<nav class="bottom-nav" id="bottomNav">
+  <button class="nav-btn active" data-view="home">
+    <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+    <span>Home</span>
+  </button>
+  <button class="nav-btn" data-view="search">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <span>Search</span>
+  </button>
+  <button class="nav-btn" data-view="files">
+    <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+    <span>Files</span>
+  </button>
+  <button class="nav-btn" data-view="courses">
+    <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    <span>My Courses</span>
+  </button>
+  <button class="nav-btn" data-view="developer">
+    <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    <span>Developer</span>
+  </button>
+  <button class="nav-btn" data-view="profile">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>
+    <span>Profile</span>
+  </button>
+</nav>
+
+<!-- Auth Modal -->
+<div class="modal-overlay auth-modal" id="authOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="authTitle">Log In</h2>
+      <button class="close-btn" id="closeAuthModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="auth-hint" id="authHint" style="display:none;color:var(--text-dim);font-size:12.5px;margin-bottom:16px;padding:10px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;">Log in or create a free account to watch this course and download its files.</p>
+      <input type="text" class="auth-field" id="authName" placeholder="Full name" style="display:none;">
+      <input type="email" class="auth-field" id="authEmail" placeholder="Email">
+      <input type="password" class="auth-field" id="authPassword" placeholder="Password">
+      <button class="auth-submit" id="authSubmitBtn">Log In</button>
+      <p class="auth-err" id="authErr"></p>
+      <p class="auth-switch" id="authSwitchText">New here? <a id="authSwitchLink">Create an account</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">Course</h2>
+      <button class="close-btn" id="closeModal">✕</button>
+    </div>
+    <div class="video-wrap" id="videoWrap"></div>
+    <div class="modal-body">
+      <p class="modal-desc" id="modalDesc"></p>
+      <div id="buyBox"></div>
+      <div id="ad-modal" class="ad-slot" style="padding:0;margin-bottom:20px;"></div>
+      <div class="file-list" id="fileList"></div>
+    </div>
+  </div>
+</div>
+
+<div id="ad-bottom" class="ad-slot ad-slot-full"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, onValue, set, get, push, remove } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import {
+  getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  onAuthStateChanged, signOut, updateProfile
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA_IBLZT8km2XN4pfHdjEXz70jQd8XWxpo",
+  authDomain: "easyotp-eb922.firebaseapp.com",
+  databaseURL: "https://easyotp-eb922-default-rtdb.firebaseio.com",
+  projectId: "easyotp-eb922",
+  storageBucket: "easyotp-eb922.firebasestorage.app",
+  messagingSenderId: "756359039163",
+  appId: "1:756359039163:web:2d3dd122ea66d3e1db419e",
+  measurementId: "G-8GDPG05JMJ"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const auth = getAuth(app);
+
+const grid = document.getElementById('courseGrid');
+const courseCount = document.getElementById('courseCount');
+const catBar = document.getElementById('catBar');
+const modalOverlay = document.getElementById('modalOverlay');
+const modalTitle = document.getElementById('modalTitle');
+const modalDesc = document.getElementById('modalDesc');
+const videoWrap = document.getElementById('videoWrap');
+const fileList = document.getElementById('fileList');
+const closeModal = document.getElementById('closeModal');
+const buyBoxEl = document.getElementById('buyBox');
+const authArea = document.getElementById('authArea');
+
+let coursesData = {};
+let categoriesData = {};
+let activeCategory = 'all';
+let currentUser = null;
+let ownedCourses = new Set();
+let isSecretUnlocked = false;
+let pgSettings = {};
+
+// ---------- Video helpers ----------
+function getYoutubeEmbed(url) {
+  let videoId = null;
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=)([^&\s]+)/,
+    /(?:youtu\.be\/)([^?\s]+)/,
+    /(?:youtube\.com\/embed\/)([^?\s]+)/,
+    /(?:youtube\.com\/shorts\/)([^?\s]+)/
+  ];
+  for (const p of patterns) {
+    const m = url.match(p);
+    if (m) { videoId = m[1]; break; }
+  }
+  return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+}
+function isYoutube(url) { return /youtube\.com|youtu\.be/.test(url || ''); }
+
+function renderVideoInto(target, url, customThumb) {
+  target.innerHTML = '';
+  target.classList.remove('cp-idle');
+  if (isYoutube(url)) {
+    const embed = getYoutubeEmbed(url);
+    const thumb = customThumb || getYoutubeThumb(url);
+    const startBtn = document.createElement('div');
+    startBtn.style.cssText = 'position:absolute;inset:0;background:#000 center/cover no-repeat' + (thumb ? `,url('${thumb}')` : '') + ';display:flex;align-items:center;justify-content:center;cursor:pointer;';
+    startBtn.innerHTML = `<div style="width:64px;height:64px;border-radius:50%;background:rgba(0,240,216,0.9);display:flex;align-items:center;justify-content:center;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="#04140f"><path d="M8 5v14l11-7z"/></svg>
+    </div>`;
+    startBtn.addEventListener('click', () => {
+      const iframe = document.createElement('iframe');
+      iframe.src = (embed || url) + (embed ? '?autoplay=1&mute=0&rel=0&modestbranding=1&playsinline=1&controls=1&showinfo=0&iv_load_policy=3&fs=1&disablekb=1' : '');
+      iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen";
+      iframe.allowFullscreen = true;
+      iframe.setAttribute('allowfullscreen', 'true');
+      target.innerHTML = '';
+      target.appendChild(iframe);
+
+      // Custom fullscreen button (fallback + consistent UI, wraps the whole player area)
+      const fsBtn = document.createElement('button');
+      fsBtn.setAttribute('aria-label', 'Fullscreen');
+      fsBtn.style.cssText = 'position:absolute;bottom:10px;right:10px;width:36px;height:36px;border-radius:8px;background:rgba(0,0,0,0.55);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:5;';
+      fsBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+      fsBtn.addEventListener('click', () => {
+        if (target.requestFullscreen) target.requestFullscreen();
+        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
+        else if (iframe.requestFullscreen) iframe.requestFullscreen();
+        else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
+      });
+      target.appendChild(fsBtn);
+    });
+    target.appendChild(startBtn);
+  } else {
+    buildCustomMp4Player(target, url, customThumb);
+  }
+}
+
+function renderVideo(url, customThumb) {
+  renderVideoInto(videoWrap, url, customThumb);
+}
+
+function fmtTime(s) {
+  if (!isFinite(s)) return '0:00';
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+function buildCustomMp4Player(target, url, posterUrl) {
+  const video = document.createElement('video');
+  video.playsInline = true;
+  video.setAttribute('webkit-playsinline', 'true');
+  video.preload = 'auto';
+  video.setAttribute('controlsList', 'nodownload noremoteplayback');
+  video.setAttribute('disablePictureInPicture', 'true');
+  video.disablePictureInPicture = true;
+  if (posterUrl) video.poster = posterUrl;
+
+  // Block right-click / long-press "save video as"
+  video.addEventListener('contextmenu', (e) => e.preventDefault());
+  target.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Block drag-out (another way videos get saved)
+  video.addEventListener('dragstart', (e) => e.preventDefault());
+  target.style.userSelect = 'none';
+  target.style.webkitUserSelect = 'none';
+
+  // ---- Loading indicator ----
+  const loadingBox = document.createElement('div');
+  loadingBox.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;color:#8a96a8;font-family:JetBrains Mono,monospace;font-size:12px;pointer-events:none;';
+  loadingBox.innerHTML = `
+    <div style="width:34px;height:34px;border:3px solid rgba(255,255,255,0.15);border-top-color:#00f0d8;border-radius:50%;animation:cpspin 0.8s linear infinite;"></div>
+    <span id="cpLoadingText">Loading video…</span>
+  `;
+  if (!document.getElementById('cpSpinKeyframes')) {
+    const style = document.createElement('style');
+    style.id = 'cpSpinKeyframes';
+    style.textContent = '@keyframes cpspin{to{transform:rotate(360deg);}}';
+    document.head.appendChild(style);
+  }
+
+  const errorBox = document.createElement('div');
+  errorBox.style.cssText = 'position:absolute;inset:0;display:none;flex-direction:column;gap:10px;align-items:center;justify-content:center;color:var(--text-dim,#8a96a8);font-family:JetBrains Mono,monospace;font-size:12px;text-align:center;padding:20px;';
+  errorBox.innerHTML = `
+    <span style="font-size:22px;">⚠</span>
+    <span id="cpErrorText">This video couldn't be played.<br>The link may not be a direct video file, or the host blocks playback.</span>
+    <button id="cpRetryBtn" style="margin-top:6px;padding:8px 18px;border-radius:8px;border:1px solid #00f0d8;background:transparent;color:#00f0d8;font-family:inherit;font-size:12px;cursor:pointer;">Retry</button>
+  `;
+
+  // ---- Retry logic: GitHub / third-party hosts sometimes drop the first request ----
+  let retryCount = 0;
+  const MAX_AUTO_RETRIES = 3;
+  let loadTimeoutId = null;
+
+  function showLoading(msg) {
+    loadingBox.style.display = 'flex';
+    loadingBox.querySelector('#cpLoadingText').textContent = msg || 'Loading video…';
+    errorBox.style.display = 'none';
+    video.style.visibility = 'hidden';
+    centerPlay.style.display = 'none';
+    controls.style.display = 'none';
+  }
+
+  function showError(msg) {
+    loadingBox.style.display = 'none';
+    errorBox.style.display = 'flex';
+    errorBox.querySelector('#cpErrorText').innerHTML = msg || 'This video couldn\'t be played.<br>The link may not be a direct video file, or the host blocks playback.';
+    video.style.display = 'none';
+    centerPlay.style.display = 'none';
+    controls.style.display = 'none';
+  }
+
+  function showReady() {
+    clearTimeout(loadTimeoutId);
+    loadingBox.style.display = 'none';
+    errorBox.style.display = 'none';
+    video.style.display = '';
+    video.style.visibility = 'visible';
+    centerPlay.style.display = 'flex';
+    controls.style.display = '';
+  }
+
+  function attemptLoad(isRetry) {
+    showLoading(isRetry ? `Retrying… (${retryCount}/${MAX_AUTO_RETRIES})` : 'Loading video…');
+    clearTimeout(loadTimeoutId);
+    // cache-bust so a fresh request is made instead of hitting a broken cached response
+    video.src = isRetry ? (url + (url.includes('?') ? '&' : '?') + '_r=' + Date.now()) : url;
+    video.load();
+    // If nothing happens within 15s, treat it as a stall and retry automatically
+    loadTimeoutId = setTimeout(() => {
+      if (video.readyState < 2) { // HAVE_CURRENT_DATA not reached
+        handleLoadFailure('Taking too long to load.');
+      }
+    }, 15000);
+  }
+
+  function handleLoadFailure(reason) {
+    if (retryCount < MAX_AUTO_RETRIES) {
+      retryCount++;
+      setTimeout(() => attemptLoad(true), 900);
+    } else {
+      showError((reason || 'This video couldn\'t be played.') + '<br>The host may be slow or blocking playback. Tap Retry to try again.');
+    }
+  }
+
+  video.addEventListener('error', () => handleLoadFailure('This video couldn\'t be played.'));
+  video.addEventListener('stalled', () => {
+    if (video.readyState < 2) handleLoadFailure('Connection stalled.');
+  });
+  video.addEventListener('loadeddata', showReady);
+  video.addEventListener('canplay', showReady);
+
+  attemptLoad(false);
+
+  // Best-effort: pause + blur video if the tab is hidden or the page loses focus
+  // (helps against some screen-recording/screenshot flows; cannot fully prevent OS-level recording)
+  const privacyGuard = () => {
+    if (document.hidden) {
+      video.pause();
+    }
+  };
+  document.addEventListener('visibilitychange', privacyGuard);
+
+  const centerPlay = document.createElement('div');
+  centerPlay.className = 'cp-center-play';
+  centerPlay.style.display = 'none';
+  centerPlay.innerHTML = `<div class="circle"><svg width="24" height="24" viewBox="0 0 24 24" fill="#04140f"><path d="M8 5v14l11-7z"/></svg></div>`;
+
+  const controls = document.createElement('div');
+  controls.className = 'cp-controls';
+  controls.style.display = 'none';
+  controls.innerHTML = `
+    <button class="cp-btn" id="cpPlayBtn" aria-label="Play/Pause">
+      <svg viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <span class="cp-time" id="cpTime">0:00 / 0:00</span>
+    <div class="cp-progress" id="cpProgress"><div class="cp-progress-fill" id="cpProgressFill"></div></div>
+    <button class="cp-btn" id="cpFsBtn" aria-label="Fullscreen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+    </button>
+  `;
+
+  target.appendChild(video);
+  target.appendChild(centerPlay);
+  target.appendChild(controls);
+  target.appendChild(loadingBox);
+  target.appendChild(errorBox);
+
+  errorBox.querySelector('#cpRetryBtn').addEventListener('click', () => {
+    retryCount = 0;
+    attemptLoad(false);
+  });
+
+  const playBtn = controls.querySelector('#cpPlayBtn');
+  const timeEl = controls.querySelector('#cpTime');
+  const progress = controls.querySelector('#cpProgress');
+  const progressFill = controls.querySelector('#cpProgressFill');
+  const fsBtn = controls.querySelector('#cpFsBtn');
+
+  const playIcon = `<svg viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>`;
+  const pauseIcon = `<svg viewBox="0 0 24 24" fill="#fff"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>`;
+
+  function togglePlay() {
+    if (video.paused) {
+      const p = video.play();
+      if (p && p.catch) {
+        p.catch((err) => {
+          console.warn('Video play failed:', err);
+          showError('This video couldn\'t be played.<br>(' + (err.message || err.name || 'playback blocked') + ')');
+        });
+      }
+    } else {
+      video.pause();
+    }
+  }
+  centerPlay.addEventListener('click', togglePlay);
+  playBtn.addEventListener('click', togglePlay);
+
+  video.addEventListener('play', () => { playBtn.innerHTML = pauseIcon; centerPlay.style.display = 'none'; });
+  video.addEventListener('pause', () => { playBtn.innerHTML = playIcon; centerPlay.style.display = 'flex'; });
+
+  video.addEventListener('timeupdate', () => {
+    if (video.duration) {
+      progressFill.style.width = (video.currentTime / video.duration * 100) + '%';
+      timeEl.textContent = `${fmtTime(video.currentTime)} / ${fmtTime(video.duration)}`;
+    }
+  });
+  video.addEventListener('loadedmetadata', () => {
+    timeEl.textContent = `0:00 / ${fmtTime(video.duration)}`;
+  });
+
+  progress.addEventListener('click', (e) => {
+    const rect = progress.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    if (video.duration) video.currentTime = pct * video.duration;
+  });
+
+  // Fullscreen + force landscape orientation
+  fsBtn.addEventListener('click', async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await target.requestFullscreen();
+        if (screen.orientation && screen.orientation.lock) {
+          try { await screen.orientation.lock('landscape'); } catch (e) {}
+        }
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (e) {}
+  });
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && screen.orientation && screen.orientation.unlock) {
+      try { screen.orientation.unlock(); } catch (e) {}
+    }
+  });
+
+  // Auto-hide controls after inactivity while playing
+  let hideTimer;
+  function showControls() {
+    target.classList.remove('cp-idle');
+    clearTimeout(hideTimer);
+    if (!video.paused) hideTimer = setTimeout(() => target.classList.add('cp-idle'), 2500);
+  }
+  target.addEventListener('mousemove', showControls);
+  target.addEventListener('touchstart', showControls);
+  video.addEventListener('play', showControls);
+
+  video.play().catch(() => {});
+}
+
+function getYoutubeThumb(url) {
+  const embed = getYoutubeEmbed(url);
+  if (!embed) return null;
+  const id = embed.split('/embed/')[1];
+  return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+// ---------- Modal ----------
+let currentCourseId = null;
+let pendingCourseId = null; // course user tried to open before logging in
+
+function userOwnsCourse(courseId) {
+  return currentUser && (isSecretUnlocked || ownedCourses.has(courseId));
+}
+
+function renderFileList(course) {
+  fileList.innerHTML = '';
+  if (Array.isArray(course.files) && course.files.length) {
+    course.files.forEach(f => {
+      if (!f || !f.url) return;
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.innerHTML = `
+        <span class="file-icon">▤</span>
+        <span class="file-name">${escapeHtml(f.name || 'Source files')}</span>
+        <a href="${f.url}" target="_blank" rel="noopener">Download</a>
+      `;
+      fileList.appendChild(item);
+    });
+  }
+  if (!fileList.children.length) {
+    fileList.innerHTML = '<p style="color:var(--text-dim);font-size:13px;">No downloadable files for this course.</p>';
+  }
+}
+
+function openCourse(id) {
+  const course = coursesData[id];
+  if (!course) return;
+
+  if (!currentUser) {
+    pendingCourseId = id;
+    openAuthModal('login');
+    return;
+  }
+
+  currentCourseId = id;
+  modalTitle.textContent = course.title || 'Untitled Course';
+  modalDesc.textContent = course.description || '';
+
+  const isPaid = course.priceType === 'paid' && course.price > 0;
+  const unlocked = !isPaid || userOwnsCourse(id);
+
+  if (unlocked) {
+    renderVideo(course.videoUrl, course.thumbnailUrl);
+    renderFileList(course);
+    buyBoxEl.innerHTML = '';
+  } else {
+    videoWrap.innerHTML = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-size:13px;">🔒 Locked — purchase to unlock</div>`;
+    fileList.innerHTML = '';
+    buyBoxEl.innerHTML = `
+      <div class="buy-box">
+        <div class="price-tag">₹${escapeHtml(String(course.price))}<span>one-time</span></div>
+        <button class="buy-btn" id="buyNowBtn">Buy Now</button>
+      </div>
+    `;
+    document.getElementById('buyNowBtn').addEventListener('click', () => handleBuyClick(id, course));
+  }
+
+  modalOverlay.classList.add('active');
+}
+
+function closeModalFn() {
+  modalOverlay.classList.remove('active');
+  videoWrap.innerHTML = '';
+  buyBoxEl.innerHTML = '';
+}
+closeModal.addEventListener('click', closeModalFn);
+modalOverlay.addEventListener('click', (e) => { if (e.target === modalOverlay) closeModalFn(); });
+
+// ---------- Categories ----------
+function renderCategoryBar() {
+  const cats = Object.values(categoriesData).map(c => c.name).filter(Boolean);
+  catBar.innerHTML = `<div class="cat-chip ${activeCategory==='all'?'active':''}" data-cat="all">All</div>`;
+  cats.forEach(name => {
+    const chip = document.createElement('div');
+    chip.className = 'cat-chip' + (activeCategory === name ? ' active' : '');
+    chip.dataset.cat = name;
+    chip.textContent = name;
+    catBar.appendChild(chip);
+  });
+  catBar.querySelectorAll('.cat-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      activeCategory = chip.dataset.cat;
+      renderCategoryBar();
+      renderCourses();
+    });
+  });
+}
+
+// ---------- Courses ----------
+function renderCourses() {
+  let ids = Object.keys(coursesData);
+  if (activeCategory !== 'all') {
+    ids = ids.filter(id => (coursesData[id].category || '') === activeCategory);
+  }
+  courseCount.textContent = `${ids.length} course${ids.length === 1 ? '' : 's'}`;
+
+  if (!ids.length) {
+    grid.innerHTML = '<div class="empty-state">No courses in this category yet.</div>';
+    return;
+  }
+
+  grid.innerHTML = '';
+  ids.reverse().forEach(id => {
+    const c = coursesData[id];
+    const card = document.createElement('div');
+    card.className = 'card';
+    const thumb = c.thumbnailUrl || (isYoutube(c.videoUrl) ? getYoutubeThumb(c.videoUrl) : null);
+    card.innerHTML = `
+      <div class="thumb">
+        ${thumb ? `<img src="${thumb}" alt="">` : '▶'}
+        <div class="play-badge" style="font-size:28px;">▶</div>
+      </div>
+      <div class="card-body">
+        ${c.category ? `<div class="card-cat">${escapeHtml(c.category)}</div>` : ''}
+        <div class="card-title">${escapeHtml(c.title || 'Untitled')}</div>
+        <div class="card-desc">${escapeHtml((c.description || '').slice(0,90))}${(c.description||'').length>90?'…':''}</div>
+        <div class="card-meta">${Array.isArray(c.files) ? c.files.length : 0} file(s) included</div>
+        <span class="price-badge ${c.priceType==='paid'?'paid':'free'}">${c.priceType==='paid' ? '₹'+escapeHtml(String(c.price)) : 'FREE'}</span>
+      </div>
+    `;
+    card.addEventListener('click', () => openCourse(id));
+    grid.appendChild(card);
+  });
+}
+
+// ---------- Dynamic Ads (admin controlled) ----------
+// Each ad doc: { placement: 'top'|'mid1'|'mid2'|'modal'|'bottom', type: 'code'|'url', content: '...' }
+const adSlotEls = {
+  top: document.getElementById('ad-top'),
+  modal: document.getElementById('ad-modal'),
+  bottom: document.getElementById('ad-bottom'),
+  searchTop: document.getElementById('ad-search-top'),
+  searchBottom: document.getElementById('ad-search-bottom'),
+  filesTop: document.getElementById('ad-files-top'),
+  filesBottom: document.getElementById('ad-files-bottom'),
+  coursesTop: document.getElementById('ad-courses-top'),
+  coursesBottom: document.getElementById('ad-courses-bottom')
+  // NOTE: intentionally no 'profile' entry — Profile page stays ad-free.
+};
+
+function buildAdInner(ad) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ad-slot-inner';
+
+  if (ad.type === 'url') {
+    // Image ad linking out
+    const img = document.createElement('img');
+    img.src = ad.content;
+    img.alt = 'Advertisement';
+    img.style.maxWidth = '100%';
+    img.style.borderRadius = '6px';
+    if (ad.linkUrl) {
+      const a = document.createElement('a');
+      a.href = ad.linkUrl;
+      a.target = '_blank';
+      a.rel = 'noopener sponsored';
+      a.appendChild(img);
+      wrap.appendChild(a);
+    } else {
+      wrap.appendChild(img);
+    }
+  } else {
+    // Real ad code (AdSense, Adsterra, effectivecpmnetwork, etc.) needs to run
+    // in a genuine document — not a sandboxed srcdoc iframe — because these
+    // networks check document/window context (AdSense) or use document.write()
+    // in ways that sandboxed srcdoc blocks. We create a blank same-origin
+    // iframe and write the ad markup into it directly via contentWindow,
+    // which behaves like a real embedded page.
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('scrolling', 'no');
+    iframe.setAttribute('frameborder', '0');
+    iframe.style.cssText = 'width:100%;border:none;display:block;overflow:hidden;';
+    iframe.style.height = (ad.height || '280') + 'px';
+    wrap.appendChild(iframe);
+
+    // Write after the iframe is in the DOM so contentWindow exists.
+    requestAnimationFrame(() => {
+      try {
+        const doc = iframe.contentWindow.document;
+        doc.open();
+        doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+          <style>
+            html,body{margin:0;padding:0;background:transparent;overflow:hidden;
+              display:flex;align-items:center;justify-content:center;min-height:100%;}
+          </style>
+          </head><body>${ad.content}</body></html>`);
+        doc.close();
+
+        // Some networks (AdSense responsive units especially) render their
+        // creative slightly after load — poll briefly and grow the iframe to
+        // fit real content height instead of clipping it.
+        let tries = 0;
+        const grow = setInterval(() => {
+          tries++;
+          try {
+            const h = doc.body ? doc.body.scrollHeight : 0;
+            if (h && h > 20) {
+              iframe.style.height = Math.max(h, parseInt(ad.height || '50', 10)) + 'px';
+            }
+          } catch (e) {}
+          if (tries > 20) clearInterval(grow);
+        }, 500);
+      } catch (e) {
+        wrap.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:10px;">Ad failed to load.</div>';
+      }
+    });
+  }
+  return wrap;
+}
+
+function renderAds(adsData) {
+  Object.values(adSlotEls).forEach(el => { if (el) el.innerHTML = ''; });
+
+  Object.values(adsData || {}).forEach(ad => {
+    if (!ad || !ad.placement || !ad.content) return;
+    const container = adSlotEls[ad.placement];
+    if (!container) return;
+
+    const label = document.createElement('div');
+    label.className = 'ad-label';
+    label.textContent = 'Advertisement';
+    container.appendChild(label);
+    container.appendChild(buildAdInner(ad));
+  });
+}
+
+// ---------- Auth UI ----------
+const authOverlay = document.getElementById('authOverlay');
+const authTitle = document.getElementById('authTitle');
+const authName = document.getElementById('authName');
+const authEmail = document.getElementById('authEmail');
+const authPassword = document.getElementById('authPassword');
+const authSubmitBtn = document.getElementById('authSubmitBtn');
+const authErr = document.getElementById('authErr');
+const authSwitchText = document.getElementById('authSwitchText');
+const authSwitchLink = document.getElementById('authSwitchLink');
+const closeAuthModal = document.getElementById('closeAuthModal');
+const loginNavBtn = document.getElementById('loginNavBtn');
+
+let authMode = 'login'; // or 'signup'
+
+function openAuthModal(mode) {
+  authMode = mode;
+  authErr.style.display = 'none';
+  authName.value = ''; authEmail.value = ''; authPassword.value = '';
+  document.getElementById('authHint').style.display = pendingCourseId ? 'block' : 'none';
+  if (mode === 'signup') {
+    authTitle.textContent = 'Create Account';
+    authName.style.display = 'block';
+    authSubmitBtn.textContent = 'Sign Up';
+    authSwitchText.innerHTML = 'Already have an account? <a id="authSwitchLink">Log in</a>';
+  } else {
+    authTitle.textContent = 'Log In';
+    authName.style.display = 'none';
+    authSubmitBtn.textContent = 'Log In';
+    authSwitchText.innerHTML = 'New here? <a id="authSwitchLink">Create an account</a>';
+  }
+  document.getElementById('authSwitchLink').addEventListener('click', () => openAuthModal(mode === 'login' ? 'signup' : 'login'));
+  authOverlay.classList.add('active');
+}
+
+loginNavBtn.addEventListener('click', () => openAuthModal('login'));
+closeAuthModal.addEventListener('click', () => { authOverlay.classList.remove('active'); pendingCourseId = null; });
+authOverlay.addEventListener('click', (e) => { if (e.target === authOverlay) { authOverlay.classList.remove('active'); pendingCourseId = null; } });
+
+function friendlyAuthError(code) {
+  const map = {
+    'auth/invalid-email': 'That email address looks invalid.',
+    'auth/user-not-found': 'No account with that email. Try creating one.',
+    'auth/wrong-password': 'Wrong password.',
+    'auth/invalid-credential': 'Incorrect email or password.',
+    'auth/email-already-in-use': 'An account already exists — just log in.',
+    'auth/weak-password': 'Password should be at least 6 characters.'
+  };
+  return map[code] || 'Something went wrong. Try again.';
+}
+
+authSubmitBtn.addEventListener('click', async () => {
+  authErr.style.display = 'none';
+  const email = authEmail.value.trim();
+  const password = authPassword.value;
+  if (!email || !password) { authErr.textContent = 'Enter email and password.'; authErr.style.display = 'block'; return; }
+
+  try {
+    if (authMode === 'signup') {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      if (authName.value.trim()) await updateProfile(cred.user, { displayName: authName.value.trim() });
+      await set(ref(db, `users/${cred.user.uid}`), {
+        name: authName.value.trim(), email, createdAt: Date.now()
+      });
+    } else {
+      await signInWithEmailAndPassword(auth, email, password);
+    }
+    authOverlay.classList.remove('active');
+    if (pendingCourseId) {
+      const id = pendingCourseId;
+      pendingCourseId = null;
+      openCourse(id);
+    }
+  } catch (e) {
+    authErr.textContent = friendlyAuthError(e.code);
+    authErr.style.display = 'block';
+  }
+});
+
+function updateAuthArea() {
+  if (currentUser) {
+    authArea.innerHTML = `
+      <span class="user-chip">${escapeHtml(currentUser.displayName || currentUser.email)}</span>
+      <button class="auth-btn" id="logoutBtn">Log Out</button>
+    `;
+    document.getElementById('logoutBtn').addEventListener('click', () => signOut(auth));
+  } else {
+    authArea.innerHTML = `<button class="auth-btn" id="loginNavBtn2">Log In</button>`;
+    document.getElementById('loginNavBtn2').addEventListener('click', () => openAuthModal('login'));
+  }
+}
+
+onAuthStateChanged(auth, (user) => {
+  currentUser = user;
+  updateAuthArea();
+  if (user) {
+    onValue(ref(db, 'purchases/' + user.uid), (snap) => {
+      ownedCourses = new Set(Object.keys(snap.val() || {}));
+      if (currentCourseId) openCourse(currentCourseId); // refresh unlock state if modal open
+      if (document.getElementById('view-files').classList.contains('active')) renderFilesPage();
+      if (document.getElementById('view-profile').classList.contains('active')) renderProfilePage();
+      if (document.getElementById('view-courses').classList.contains('active')) renderMyCoursesPage();
+    });
+    onValue(ref(db, 'unlockedUsers/' + user.uid), (snap) => {
+      isSecretUnlocked = snap.exists();
+      if (currentCourseId) openCourse(currentCourseId);
+      if (document.getElementById('view-files').classList.contains('active')) renderFilesPage();
+      if (document.getElementById('view-profile').classList.contains('active')) renderProfilePage();
+      if (document.getElementById('view-courses').classList.contains('active')) renderMyCoursesPage();
+    });
+  } else {
+    ownedCourses = new Set();
+    isSecretUnlocked = false;
+  }
+  if (document.getElementById('view-profile').classList.contains('active')) renderProfilePage();
+});
+
+onValue(ref(db, 'settings/payment'), (snap) => {
+  pgSettings = snap.val() || {};
+});
+
+// ---------- ZapUPI Purchase Flow ----------
+function handleBuyClick(courseId, course) {
+  if (!currentUser) {
+    openAuthModal('login');
+    return;
+  }
+  if (!pgSettings.enabled) {
+    alert('Payments are currently unavailable. Please try again later.');
+    return;
+  }
+  if (!pgSettings.apiKey) {
+    alert('Payment gateway is not configured yet.');
+    return;
+  }
+  if (typeof ZapUPI === 'undefined') {
+    alert('Payment gateway failed to load. Check your connection and try again.');
+    return;
+  }
+
+  const orderId = "ORD" + Date.now() + currentUser.uid.substring(0, 4);
+  const amt = course.price;
+
+  set(ref(db, `pendingOrders/${orderId}`), {
+    courseId, title: course.title, amount: amt,
+    userId: currentUser.uid, status: 'pending', createdAt: new Date().toISOString()
+  }).then(() => {
+    ZapUPI.createOrder({ zap_key: pgSettings.apiKey, order_id: orderId, amount: amt.toString() }, {
+      onResponse: function (url) { ZapUPI.loadPayment(url); },
+      onError: function (err) { alert('Gateway error: ' + err); }
+    });
+  }).catch(err => alert('Failed to start order: ' + err.message));
+}
+
+if (typeof ZapUPI !== 'undefined') {
+  window.addEventListener('load', () => {
+    ZapUPI.setPaymentCallbacks({
+      onSuccess: function (oid) { verifyZapPayment(oid); },
+      onFailed: function () { alert('Payment failed.'); },
+      onTimeout: function () { alert('Payment timed out.'); }
+    });
+  });
+}
+
+async function verifyZapPayment(oid) {
+  try {
+    ZapUPI.orderStatus({ zap_key: pgSettings.apiKey, order_id: oid }, {
+      onResponse: async function (a, d) {
+        if (d.data.status === 'Success') {
+          const poSnap = await get(ref(db, `pendingOrders/${oid}`));
+          if (!poSnap.exists()) { alert('Order verification failed or expired.'); return; }
+          const po = poSnap.val();
+
+          await set(ref(db, `purchases/${po.userId}/${po.courseId}`), {
+            purchasedAt: new Date().toISOString(), amount: po.amount, orderId: oid
+          });
+
+          await push(ref(db, 'payments'), {
+            orderId: oid, uid: po.userId,
+            username: currentUser.displayName || currentUser.email,
+            amount: po.amount, gateway: 'ZapUPI', status: 'Success',
+            date: new Date().toISOString(), utr: d.data.utr
+          });
+
+          await remove(ref(db, `pendingOrders/${oid}`));
+
+          alert('Payment successful! Course unlocked.');
+          if (currentCourseId) openCourse(currentCourseId);
+        } else {
+          alert('Payment could not be verified.');
+        }
+      },
+      onError: function (e) { alert('Verification error: ' + e); }
+    });
+  } catch (e) {
+    alert('Verification failed: ' + e.message);
+  }
+}
+
+// ---------- Bottom Nav / SPA View Switching ----------
+const navBtns = document.querySelectorAll('.nav-btn');
+const pageViews = document.querySelectorAll('.page-view');
+
+function switchView(view) {
+  pageViews.forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  window.scrollTo({top:0, behavior:'instant'});
+  if (view === 'files') renderFilesPage();
+  if (view === 'profile') renderProfilePage();
+  if (view === 'courses') renderMyCoursesPage();
+  if (view === 'developer') renderDeveloperPage();
+  if (view === 'search') { searchInput.focus(); }
+}
+
+navBtns.forEach(btn => {
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
+});
+
+// ---------- Search Page ----------
+const searchInput = document.getElementById('searchInput');
+const searchGrid = document.getElementById('searchGrid');
+const searchCount = document.getElementById('searchCount');
+const searchHint = document.getElementById('searchHint');
+
+function renderCourseCard(id, c) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const thumb = c.thumbnailUrl || (isYoutube(c.videoUrl) ? getYoutubeThumb(c.videoUrl) : null);
+  card.innerHTML = `
+    <div class="thumb">
+      ${thumb ? `<img src="${thumb}" alt="">` : '▶'}
+      <div class="play-badge" style="font-size:28px;">▶</div>
+    </div>
+    <div class="card-body">
+      ${c.category ? `<div class="card-cat">${escapeHtml(c.category)}</div>` : ''}
+      <div class="card-title">${escapeHtml(c.title || 'Untitled')}</div>
+      <div class="card-desc">${escapeHtml((c.description || '').slice(0,90))}${(c.description||'').length>90?'…':''}</div>
+      <div class="card-meta">${Array.isArray(c.files) ? c.files.length : 0} file(s) included</div>
+      <span class="price-badge ${c.priceType==='paid'?'paid':'free'}">${c.priceType==='paid' ? '₹'+escapeHtml(String(c.price)) : 'FREE'}</span>
+    </div>
+  `;
+  card.addEventListener('click', () => { switchView('home'); openCourse(id); });
+  return card;
+}
+
+// ---------- My Courses Page ----------
+const myCoursesGrid = document.getElementById('myCoursesGrid');
+const myCoursesCount = document.getElementById('myCoursesCount');
+
+function renderMyCoursesPage() {
+  if (!currentUser) {
+    myCoursesCount.textContent = '';
+    myCoursesGrid.innerHTML = '<div class="empty-state">Log in to see the courses you own.</div>';
+    return;
+  }
+  const ids = isSecretUnlocked ? Object.keys(coursesData) : Array.from(ownedCourses);
+  myCoursesCount.textContent = `${ids.length} course${ids.length === 1 ? '' : 's'}`;
+
+  if (!ids.length) {
+    myCoursesGrid.innerHTML = '<div class="empty-state">You haven\'t unlocked any courses yet. Browse Home to get started.</div>';
+    return;
+  }
+  myCoursesGrid.innerHTML = '';
+  ids.forEach(id => {
+    const c = coursesData[id];
+    if (!c) return;
+    myCoursesGrid.appendChild(renderCourseCard(id, c));
+  });
+}
+
+function runSearch() {
+  const q = searchInput.value.trim().toLowerCase();
+  searchGrid.innerHTML = '';
+  if (!q) {
+    searchCount.textContent = '';
+    searchHint.style.display = 'block';
+    return;
+  }
+  searchHint.style.display = 'none';
+  const matches = Object.entries(coursesData).filter(([id, c]) => {
+    const hay = `${c.title || ''} ${c.description || ''} ${c.category || ''}`.toLowerCase();
+    return hay.includes(q);
+  });
+  searchCount.textContent = `${matches.length} result${matches.length === 1 ? '' : 's'}`;
+  if (!matches.length) {
+    searchGrid.innerHTML = '<div class="empty-state">No courses match your search.</div>';
+    return;
+  }
+  matches.forEach(([id, c]) => searchGrid.appendChild(renderCourseCard(id, c)));
+}
+searchInput.addEventListener('input', runSearch);
+
+// ---------- Files Page ----------
+function renderFilesPage() {
+  const filesListEl = document.getElementById('filesList');
+  const filesCountEl = document.getElementById('filesCount');
+  const ids = Object.keys(coursesData);
+  const withFiles = ids.filter(id => Array.isArray(coursesData[id].files) && coursesData[id].files.length);
+  filesCountEl.textContent = `${withFiles.length} course${withFiles.length === 1 ? '' : 's'}`;
+
+  if (!withFiles.length) {
+    filesListEl.innerHTML = '<div class="empty-state">No files available yet.</div>';
+    return;
+  }
+
+  filesListEl.innerHTML = '';
+  withFiles.reverse().forEach(id => {
+    const c = coursesData[id];
+    const isPaid = c.priceType === 'paid' && c.price > 0;
+    const unlocked = !isPaid || userOwnsCourse(id);
+
+    const group = document.createElement('div');
+    group.className = 'file-group';
+    group.innerHTML = `
+      <div class="file-group-head">
+        <span class="file-group-title">${escapeHtml(c.title || 'Untitled')}</span>
+        <span class="file-group-lock ${unlocked ? 'unlocked' : 'locked'}">${unlocked ? 'Unlocked' : 'Locked'}</span>
+      </div>
+      <div class="file-list" id="filesGroupList-${id}"></div>
+    `;
+    filesListEl.appendChild(group);
+
+    const listEl = group.querySelector(`#filesGroupList-${id}`);
+    if (unlocked) {
+      c.files.forEach(f => {
+        if (!f || !f.url) return;
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        item.innerHTML = `
+          <span class="file-icon">▤</span>
+          <span class="file-name">${escapeHtml(f.name || 'Source files')}</span>
+          <a href="${f.url}" target="_blank" rel="noopener">Download</a>
+        `;
+        listEl.appendChild(item);
+      });
+    } else {
+      listEl.innerHTML = `<div class="locked-note">🔒 ${c.files.length} file(s) — purchase this course to unlock downloads.</div>`;
+      listEl.style.cursor = 'pointer';
+      listEl.addEventListener('click', () => { switchView('home'); openCourse(id); });
+    }
+  });
+}
+
+// ---------- Profile Page ----------
+function renderProfilePage() {
+  const el = document.getElementById('profileContent');
+  if (!currentUser) {
+    el.innerHTML = `
+      <div class="signed-out-note">
+        <p>Log in to see your email, purchase history, and account settings.</p>
+        <button class="auth-btn primary" id="profileLoginBtn">Log In</button>
+      </div>
+    `;
+    document.getElementById('profileLoginBtn').addEventListener('click', () => openAuthModal('login'));
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="profile-card">
+      <div class="profile-row">
+        <span class="profile-label">Name</span>
+        <span class="profile-value">${escapeHtml(currentUser.displayName || '—')}</span>
+      </div>
+      <div class="profile-row">
+        <span class="profile-label">Email</span>
+        <span class="profile-value">${escapeHtml(currentUser.email || '—')}</span>
+      </div>
+    </div>
+
+    <div class="profile-card">
+      <div class="section-title" style="margin-bottom:14px;"><span>My Courses</span></div>
+      <p style="color:var(--text-dim);font-size:13px;margin-bottom:10px;">${ownedCourses.size} course${ownedCourses.size===1?'':'s'} unlocked.</p>
+      <button class="auth-btn" id="goToMyCoursesBtn" style="width:100%;">View My Courses</button>
+    </div>
+
+    <div class="profile-card" id="secretKeyCard" style="display:none;">
+      <div class="section-title" style="margin-bottom:14px;"><span>Enter Secret Key</span></div>
+      <p style="color:var(--text-dim);font-size:13px;margin-bottom:12px;">Have a secret key? Enter it here to unlock every paid course and file for free.</p>
+      <input type="text" id="secretKeyEntry" placeholder="Enter secret key" style="width:100%;padding:12px 14px;background:var(--bg-card,#141a24);border:1px solid var(--border,#232b3a);border-radius:10px;color:var(--text,#fff);font-size:14px;margin-bottom:10px;box-sizing:border-box;">
+      <button class="auth-btn primary" id="submitSecretKeyBtn" style="width:100%;">Unlock</button>
+      <p id="secretKeyMsg" style="font-size:13px;margin-top:10px;"></p>
+    </div>
+
+    <div class="profile-card">
+      <div class="section-title" style="margin-bottom:14px;"><span>Account Settings</span></div>
+      <div class="profile-row" style="cursor:pointer;" id="profileLogoutRow">
+        <span class="profile-label">Log out of this account</span>
+        <span class="profile-value" style="color:var(--danger);">Log Out</span>
+      </div>
+    </div>
+  `;
+  document.getElementById('profileLogoutRow').addEventListener('click', () => signOut(auth));
+  document.getElementById('goToMyCoursesBtn').addEventListener('click', () => switchView('courses'));
+
+  // Secret key entry — only show if admin has enabled it and this user hasn't already unlocked
+  get(ref(db, 'settings/secretKey')).then(snap => {
+    const s = snap.val();
+    const card = document.getElementById('secretKeyCard');
+    if (!s || !s.enabled || !s.key) { card.style.display = 'none'; return; }
+    if (isSecretUnlocked) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    document.getElementById('submitSecretKeyBtn').addEventListener('click', async () => {
+      const entry = document.getElementById('secretKeyEntry').value.trim();
+      const msg = document.getElementById('secretKeyMsg');
+      if (!entry) { msg.style.color = 'var(--danger)'; msg.textContent = 'Enter a key first.'; return; }
+      if (entry === s.key) {
+        await set(ref(db, 'unlockedUsers/' + currentUser.uid), {
+          email: currentUser.email || '',
+          unlockedAt: Date.now()
+        });
+        msg.style.color = 'var(--accent)';
+        msg.textContent = 'Unlocked! All paid courses and files are now free for your account.';
+        isSecretUnlocked = true;
+        setTimeout(() => renderProfilePage(), 1200);
+      } else {
+        msg.style.color = 'var(--danger)';
+        msg.textContent = 'Incorrect key. Try again.';
+      }
+    });
+  });
+}
+
+// ---------- Firebase listeners ----------
+onValue(ref(db, 'courses'), (snapshot) => {
+  coursesData = snapshot.val() || {};
+  renderCourses();
+  if (document.getElementById('view-search').classList.contains('active')) runSearch();
+  if (document.getElementById('view-files').classList.contains('active')) renderFilesPage();
+}, (error) => {
+  grid.innerHTML = `<div class="empty-state">Could not load courses. ${error.message}</div>`;
+});
+
+onValue(ref(db, 'categories'), (snapshot) => {
+  categoriesData = snapshot.val() || {};
+  renderCategoryBar();
+});
+
+onValue(ref(db, 'ads'), (snapshot) => {
+  renderAds(snapshot.val());
+});
+
+let developerData = null;
+
+onValue(ref(db, 'developerSection'), (snapshot) => {
+  developerData = snapshot.val();
+  if (document.getElementById('view-developer').classList.contains('active')) {
+    renderDeveloperPage();
+  }
+});
+
+function renderDeveloperPage() {
+  const el = document.getElementById('developerContent');
+  const data = developerData;
+  if (!data || (!data.text && !data.imageUrl && !data.videoUrl)) {
+    el.innerHTML = '<div class="empty-state">Nothing here yet.</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="dev-card">
+      ${data.imageUrl ? `<img src="${escapeHtml(data.imageUrl)}" alt="Developer">` : ''}
+      <div class="dev-body">
+        <span class="dev-label">Developer</span>
+        <div class="dev-text">${escapeHtml(data.text || '')}</div>
+        ${data.videoUrl ? `<div class="video-wrap dev-video-wrap" id="devVideoWrap"></div>` : ''}
+      </div>
+    </div>
+  `;
+  if (data.videoUrl) {
+    renderVideoInto(document.getElementById('devVideoWrap'), data.videoUrl, data.thumbnailUrl);
+  }
+}
+</script>
+
+</body>
+</html>
