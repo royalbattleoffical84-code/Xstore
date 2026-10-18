@@ -31,6 +31,7 @@ const FILES = {
   broadcastQueue: 'broadcastQueue.json',
   dmQueue: 'dmQueue.json',
   staff: 'staff.json',
+  staffRequests: 'staffRequests.json',
   paymentSettings: 'paymentSettings.json'
 };
 
@@ -273,7 +274,7 @@ async function searchProducts(query) {
 
 async function createProduct(data) {
   const id = generateId('prod_');
-  const product = { ...data, views: 0, active: true, createdAt: Date.now() };
+  const product = { views: 0, active: true, createdAt: Date.now(), ...data };
   await updateCollectionAtomic('products', (products) => {
     products[id] = product;
   });
@@ -852,13 +853,54 @@ async function getAllStaff() {
   return s;
 }
 
-async function addStaff(telegramId, permissions) {
+async function addStaff(telegramId, permissions, meta) {
   await updateCollectionAtomic('staff', (staff) => {
     staff[String(telegramId)] = {
       telegramId: String(telegramId),
       permissions: permissions || ['products', 'orders'], // default limited scope
-      addedAt: Date.now()
+      addedAt: Date.now(),
+      ...(meta || {})
     };
+  });
+}
+
+async function getStaff(telegramId) {
+  const staff = readCollection('staff');
+  return staff[String(telegramId)] || null;
+}
+
+// ---- "Become a staff" applications (user -> owner approval) ----
+async function createStaffRequest(data) {
+  const id = generateId('sreq_');
+  const req = { id, status: 'pending', createdAt: Date.now(), ...data };
+  await updateCollectionAtomic('staffRequests', (all) => { all[id] = req; });
+  return req;
+}
+
+async function getPendingStaffRequests() {
+  return Object.values(readCollection('staffRequests')).filter(r => r.status === 'pending').sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+async function getStaffRequest(id) {
+  return readCollection('staffRequests')[id] || null;
+}
+
+// Latest application of a user (any status), or null
+async function getLatestStaffRequestForUser(userId) {
+  const all = Object.values(readCollection('staffRequests')).filter(r => String(r.userId) === String(userId));
+  all.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return all[0] || null;
+}
+
+// Atomically moves a request out of "pending". Returns the request if THIS
+// call decided it, or null if it was already decided / missing (so two
+// owners tapping Approve at once can't both succeed).
+async function decideStaffRequest(id, status, decidedBy) {
+  return updateCollectionAtomic('staffRequests', (all) => {
+    const r = all[id];
+    if (!r || r.status !== 'pending') return { __value: null };
+    all[id] = { ...r, status, decidedBy: String(decidedBy), decidedAt: Date.now() };
+    return { __value: all[id] };
   });
 }
 
@@ -955,6 +997,12 @@ module.exports = {
   getPendingOrdersByMethod,
   getAllStaff,
   addStaff,
+  getStaff,
+  createStaffRequest,
+  getStaffRequest,
+  getPendingStaffRequests,
+  getLatestStaffRequestForUser,
+  decideStaffRequest,
   removeStaff,
   isStaff,
   getStaffPermissions,

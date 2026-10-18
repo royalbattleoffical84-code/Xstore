@@ -4,6 +4,7 @@ const express = require('express');
 const fb = require('./localdb');
 const fampay = require('./fampay');
 const { setupAdminPanel } = require('./adminPanel');
+const { setupStaffApply } = require('./staffApply');
 const { setupMiniApp } = require('./miniapp-api');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -224,7 +225,7 @@ bot.action('check_joined', async (ctx) => {
       if (pendingPayload.startsWith('PROD_')) {
         const productId = pendingPayload.slice('PROD_'.length);
         const product = await fb.getProduct(productId);
-        if (product) {
+        if (product && (product.active || fb.isAdmin(telegramId))) {
           await fb.incrementProductViews(productId);
           pushNav(telegramId, `viewproduct_${productId}`);
           return sendProductCard(ctx, productId, product);
@@ -237,6 +238,10 @@ bot.action('check_joined', async (ctx) => {
     await ctx.answerCbQuery('❌ Abhi bhi kuch channels join nahi kiye.', { show_alert: true });
   }
 });
+
+// "Become a Staff" application flow (registered after the middlewares above so
+// banned / not-joined users can't use it)
+const staffApply = setupStaffApply(bot, fb, userState, { mdEscape, sendMainMenu, sendMainMenuToUser });
 
 // ============ START / REGISTER ============
 
@@ -252,22 +257,45 @@ bot.start(async (ctx) => {
   if (isProductLink) {
     const productId = payload.slice('PROD_'.length);
     const product = await fb.getProduct(productId);
-    if (product) {
+    if (product && (product.active || fb.isAdmin(telegramId))) {
       await fb.incrementProductViews(productId);
       pushNav(telegramId, `viewproduct_${productId}`);
       return sendProductCard(ctx, productId, product);
     }
-    // Product not found (deleted/invalid link) — fall through to normal menu
+    // Product not found / hidden / awaiting approval — fall through to normal menu
   }
 
   await sendMainMenu(ctx);
 });
 
+// Which extra staff button (if any) this user should see on the main menu
+async function getMenuFlags(userId) {
+  const isOwner = fb.isAdmin(userId);
+  const isStaff = !isOwner && await fb.isStaff(userId);
+  let pendingStaff = false;
+  if (!isOwner && !isStaff) {
+    const last = await fb.getLatestStaffRequestForUser(userId);
+    pendingStaff = !!(last && last.status === 'pending');
+  }
+  return { isOwner, isStaff, pendingStaff };
+}
+
 async function sendMainMenu(ctx) {
   const settings = await fb.getBotSettings();
   const text = settings.welcomeMessage.replace('{name}', ctx.from.first_name);
 
-  await smartReply(ctx, text, mainMenu(settings));
+  await smartReply(ctx, text, mainMenu(settings, await getMenuFlags(ctx.from.id)));
+}
+
+// Sends a fresh main menu to a user who isn't the one currently chatting
+// (e.g. right after the owner approves their staff request).
+async function sendMainMenuToUser(userId) {
+  const settings = await fb.getBotSettings();
+  const u = await fb.getUser(String(userId));
+  const text = settings.welcomeMessage.replace('{name}', (u && u.name) || '');
+  const extra = mainMenu(settings, await getMenuFlags(userId));
+  try { await bot.telegram.sendMessage(userId, text, { parse_mode: 'Markdown', ...extra }); }
+  catch (e) { await bot.telegram.sendMessage(userId, text, extra); }
 }
 
 // Default labels for the built-in menu buttons — admin can override any of
@@ -285,10 +313,12 @@ const DEFAULT_MENU_LABELS = {
   support: '📞 Support',
   language: '🌐 Hindi / English',
   checkin: '🎯 Daily Check-in',
-  leaderboard: '🏆 Leaderboard'
+  leaderboard: '🏆 Leaderboard',
+  becomestaff: '🧑‍💼 Become a Staff',
+  staffpanel: '🛠 Staff Panel'
 };
 
-function mainMenu(settings) {
+function mainMenu(settings, flags = {}) {
   const labels = { ...DEFAULT_MENU_LABELS, ...(settings?.menuLabels || {}) };
 
   const rows = [
@@ -301,6 +331,14 @@ function mainMenu(settings) {
     [Markup.button.callback(labels.checkin, 'menu_checkin'), Markup.button.callback(labels.leaderboard, 'menu_leaderboard')],
     [Markup.button.callback(labels.support, 'menu_support'), Markup.button.callback(labels.language, 'menu_language')]
   ];
+
+  // Staff: panel button right in the menu (no /command). Everyone else
+  // (except owners) can apply to become staff.
+  if (flags.isStaff) {
+    rows.push([Markup.button.callback(labels.staffpanel, 'menu_staffpanel')]);
+  } else if (!flags.isOwner) {
+    rows.push([Markup.button.callback(flags.pendingStaff ? '⏳ Staff Request Pending' : labels.becomestaff, 'menu_becomestaff')]);
+  }
 
   // Admin-configured custom link buttons on the main menu (e.g. "Join Community").
   // Supports multiple — each one is its own row.
@@ -1463,10 +1501,11 @@ bot.command('msg', async (ctx) => {
 // for delivery. Otherwise (outside a wizard), admins get the raw file_id
 // as a fallback utility for manual use.
 bot.on('document', async (ctx) => {
-  if (!fb.isAdmin(ctx.from.id)) return;
+  if (!(await adminPanel.isAdminOrStaff(ctx))) return;
 
   const handled = await adminPanel.handleAdminDocument(ctx);
   if (handled) return;
+  if (!fb.isAdmin(ctx.from.id)) return; // raw file_id helper is owner-only
 
   await ctx.reply(`📎 File ID:\n\`${ctx.message.document.file_id}\`\n\nUse /admin → Products → Add Product to use this in the wizard.`, { parse_mode: 'Markdown' });
 });
@@ -1474,10 +1513,11 @@ bot.on('document', async (ctx) => {
 // Photo handler: during the admin product wizard, this saves the product
 // image. Otherwise, admins get the raw file_id for manual broadcast/DM use.
 bot.on('photo', async (ctx) => {
-  if (!fb.isAdmin(ctx.from.id)) return;
+  if (!(await adminPanel.isAdminOrStaff(ctx))) return;
 
   const handled = await adminPanel.handleAdminPhoto(ctx);
   if (handled) return;
+  if (!fb.isAdmin(ctx.from.id)) return; // raw file_id helper is owner-only
 
   const sizes = ctx.message.photo;
   const largest = sizes[sizes.length - 1];
@@ -1490,6 +1530,9 @@ bot.on('text', async (ctx) => {
   // Admin wizard steps take priority over the regular user-facing flows
   const adminHandled = await adminPanel.handleAdminText(ctx);
   if (adminHandled) return;
+
+  // "Become a Staff" application steps (name / note)
+  if (await staffApply.handleText(ctx)) return;
 
   const state = userState[ctx.from.id];
   if (!state) return; // ignore, no active flow
