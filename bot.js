@@ -2104,7 +2104,26 @@ bot.catch(async (err, ctx) => {
   }
 });
 
-bot.launch().then(() => console.log('🤖 Bot started successfully'));
+// Start polling. If another instance of this bot is still running (e.g. the
+// old Render instance during a redeploy, or the same token running on Railway/
+// Termux/PC), Telegram answers 409 Conflict. Instead of crashing the whole
+// server (which made Render restart-loop), retry until the other instance is gone.
+function launchBot(attempt = 1) {
+  console.log('🤖 Starting bot polling (attempt ' + attempt + ')...');
+  bot.launch()
+    .then(() => console.log('🤖 Bot polling stopped'))
+    .catch((err) => {
+      const code = err && err.response && err.response.error_code;
+      if (code === 409) {
+        const delay = Math.min(5000 * attempt, 30000);
+        console.error(`⚠️ 409 Conflict: another bot instance is polling with this BOT_TOKEN. Retrying in ${delay / 1000}s...`);
+        return setTimeout(() => launchBot(attempt + 1), delay);
+      }
+      console.error('❌ Bot launch failed:', err);
+      process.exit(1);
+    });
+}
+launchBot();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
