@@ -4,6 +4,7 @@ const express = require('express');
 const fb = require('./localdb');
 const fampay = require('./fampay');
 const { setupAdminPanel } = require('./adminPanel');
+const { setupMiniApp } = require('./miniapp-api');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const app = express();
@@ -1705,7 +1706,14 @@ bot.action(/^checkzapstatus_(.+)$/, async (ctx) => {
 // by both the webhook endpoint (in case ZapUPI does call it) and the
 // polling loop below (the reliable path, since webhook_url isn't in
 // ZapUPI's documented create-order fields).
+const processingOrders = new Set(); // prevents double delivery / double wallet credit when poller, button and Mini App check at the same time
 async function checkAndProcessOrder(orderId) {
+  if (processingOrders.has(orderId)) return { processed: false, reason: 'still_pending' };
+  processingOrders.add(orderId);
+  try { return await _checkAndProcessOrder(orderId); }
+  finally { processingOrders.delete(orderId); }
+}
+async function _checkAndProcessOrder(orderId) {
   const order = await fb.getOrder(orderId);
   if (!order) return { processed: false, reason: 'not_found' };
   if (order.status === 'delivered' || order.status === 'paid') {
@@ -2071,6 +2079,9 @@ bot.action('closepopup', async (ctx) => {
 });
 
 // ============ START SERVERS ============
+
+// Telegram Mini App (serves /app + /api/mini/*)
+setupMiniApp(app, bot, fb, fampay, { checkAndProcessOrder, checkAndAlertLowStock });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`));

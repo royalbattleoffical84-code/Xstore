@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ORVIX STORE</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0f1226; --surface:#181c38; --raised:#20254a; --line:#2c3260;
+  --text:#eeeefc; --muted:#9a9fd0; --accent:#ffb020; --accent-ink:#2a1a00;
+  --ok:#3ddbb0; --bad:#ff6b7a; --shadow:0 10px 30px rgba(3,5,20,.45);
+  --display:'Bricolage Grotesque','Figtree',system-ui,sans-serif;
+  --body:'Figtree',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+[data-theme="light"]{
+  --bg:#f5f4fb; --surface:#ffffff; --raised:#ecebf7; --line:#dcdaf0;
+  --text:#17183a; --muted:#6a6d9a; --accent:#f59a00; --accent-ink:#2a1a00;
+  --ok:#0d9a76; --bad:#d6334a; --shadow:0 10px 28px rgba(40,40,100,.12);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.45;overscroll-behavior:none}
+button{font-family:inherit;color:inherit;border:0;background:none;cursor:pointer}
+input,textarea{font-family:inherit;font-size:16px;color:var(--text)}
+img{display:block}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+#app{min-height:100%;padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+.hide{display:none!important}
+
+/* ---------- splash / gate ---------- */
+.splash{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:28px}
+.logo{font-family:var(--display);font-weight:800;font-size:34px;letter-spacing:-.5px}
+.logo b{color:var(--accent)}
+.spin{width:26px;height:26px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.splash p{color:var(--muted);max-width:290px}
+.gate h2{font-family:var(--display);font-size:22px}
+.gate .ch{width:100%;max-width:320px;display:flex;flex-direction:column;gap:8px;margin-top:6px}
+
+/* ---------- header ---------- */
+.top{display:flex;align-items:center;justify-content:space-between;padding:16px 16px 6px}
+.hello{font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:-.4px}
+.hello small{display:block;font-family:var(--body);font-weight:500;font-size:13px;color:var(--muted);letter-spacing:0}
+.pill{display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-weight:700}
+.pill svg{width:16px;height:16px;color:var(--accent)}
+
+/* ---------- search + chips ---------- */
+.search{margin:10px 16px 0;display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:0 12px}
+.search svg{width:18px;height:18px;color:var(--muted);flex:none}
+.search input{flex:1;background:none;border:0;outline:0;padding:12px 0}
+.search input::placeholder{color:var(--muted)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:12px 16px 4px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:8px 14px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-weight:600;font-size:13.5px;color:var(--muted)}
+.chip.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+
+/* ---------- sections ---------- */
+.sec{padding:18px 16px 0}
+.sec h3{font-family:var(--display);font-weight:800;font-size:19px;letter-spacing:-.3px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:baseline}
+.sec h3 span{font-family:var(--body);font-weight:500;font-size:13px;color:var(--muted)}
+.rail{display:flex;gap:12px;overflow-x:auto;padding:0 16px 4px;margin:0 -16px;scroll-snap-type:x mandatory;scrollbar-width:none}
+.rail::-webkit-scrollbar{display:none}
+.rail .card{flex:none;width:62%;max-width:250px;scroll-snap-align:start;margin-left:0}
+.rail .card:first-child{margin-left:16px}
+.rail .card:last-child{margin-right:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* ---------- product card ---------- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden;text-align:left;display:flex;flex-direction:column;position:relative;transition:transform .12s}
+.card:active{transform:scale(.98)}
+.thumb{position:relative;aspect-ratio:4/3;background:var(--raised);overflow:hidden}
+.thumb img,.thumb .ph,.slide img,.slide .ph{position:absolute;inset:0;width:100%;height:100%}
+.thumb img,.slide img{object-fit:cover}
+.slide{position:relative}
+.ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--display);font-weight:800;font-size:46px;color:rgba(255,255,255,.92)}
+.tag{position:absolute;left:0;bottom:10px;background:var(--accent);color:var(--accent-ink);font-weight:800;font-size:13px;padding:5px 12px 5px 10px;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 50%,100% 100%,0 100%)}
+.tag.free{background:var(--ok);color:#00251b}
+.sold{position:absolute;inset:0;background:rgba(10,12,30,.72);display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff}
+.cbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:3px}
+.cname{font-weight:700;font-size:14.5px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cmeta{font-size:12.5px;color:var(--muted)}
+.star{color:var(--accent)}
+
+/* ---------- banners / cards ---------- */
+.pro{margin:16px 16px 0;border-radius:20px;padding:16px;background:linear-gradient(120deg,#3b2bb0,#7a3bd6 60%,#c24ac4);color:#fff;display:flex;gap:12px;align-items:center;text-align:left;width:calc(100% - 32px)}
+.pro svg{width:34px;height:34px;flex:none;color:#ffd36b}
+.pro b{display:block;font-family:var(--display);font-size:17px}
+.pro span{font-size:13px;opacity:.9}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px}
+.row{display:flex;align-items:center;gap:12px}
+.between{justify-content:space-between}
+.muted{color:var(--muted)}
+.empty{text-align:center;color:var(--muted);padding:44px 24px}
+.empty b{display:block;color:var(--text);font-family:var(--display);font-size:18px;margin-bottom:4px}
+
+/* ---------- buttons ---------- */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px 16px;border-radius:14px;font-weight:700;font-size:15.5px;background:var(--accent);color:var(--accent-ink)}
+.btn.alt{background:var(--raised);color:var(--text);border:1px solid var(--line)}
+.btn.ghost{background:none;color:var(--muted);border:1px solid var(--line)}
+.btn.ok{background:var(--ok);color:#00251b}
+.btn.sm{width:auto;padding:9px 14px;font-size:13.5px;border-radius:11px}
+.btn[disabled]{opacity:.5;pointer-events:none}
+.btn svg{width:18px;height:18px}
+.stack{display:flex;flex-direction:column;gap:10px}
+
+/* ---------- tab bar ---------- */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--surface);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:11.5px;font-weight:600;color:var(--muted);border-radius:12px}
+.tab svg{width:23px;height:23px}
+.tab.on{color:var(--accent)}
+
+/* ---------- sheet ---------- */
+.backdrop{position:fixed;inset:0;z-index:40;background:rgba(5,7,20,.6);opacity:0;transition:opacity .2s}
+.backdrop.show{opacity:1}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:41;max-height:94%;background:var(--bg);border-radius:24px 24px 0 0;display:flex;flex-direction:column;transform:translateY(100%);transition:transform .25s cubic-bezier(.2,.8,.2,1);box-shadow:var(--shadow)}
+.sheet.show{transform:none}
+.grab{width:42px;height:4px;border-radius:4px;background:var(--line);margin:9px auto 4px;flex:none}
+.sbody{overflow-y:auto;padding:6px 16px 16px;flex:1}
+.sfoot{padding:12px 16px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg);flex:none}
+.sheet h2{font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:-.4px;line-height:1.15}
+
+.gal{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;border-radius:18px;scrollbar-width:none;background:var(--raised);aspect-ratio:4/3}
+.gal::-webkit-scrollbar{display:none}
+.gal>*{flex:none;width:100%;scroll-snap-align:center}
+.dots{display:flex;justify-content:center;gap:5px;margin:8px 0 2px}
+.dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}
+.dots i.on{background:var(--accent)}
+.price{font-family:var(--display);font-weight:800;font-size:28px;color:var(--accent)}
+.price s{font-size:16px;color:var(--muted);font-weight:600;margin-left:6px}
+.desc{white-space:pre-wrap;color:var(--text);opacity:.88;margin-top:10px}
+.facts{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin-top:8px}
+.coupon{display:flex;gap:8px;margin-top:12px}
+.coupon input{flex:1;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:0;text-transform:uppercase}
+.coupon input:focus{border-color:var(--accent)}
+.note{font-size:13px;margin-top:6px}
+.note.ok{color:var(--ok)} .note.bad{color:var(--bad)}
+.review{padding:12px 0;border-top:1px solid var(--line)}
+.review:first-child{border-top:0}
+.review p{margin-top:3px;opacity:.9}
+
+/* ---------- list rows ---------- */
+.li{display:flex;gap:12px;align-items:center;padding:14px 0;border-top:1px solid var(--line)}
+.li:first-child{border-top:0}
+.li .grow{flex:1;min-width:0}
+.li .t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .s{font-size:12.5px;color:var(--muted)}
+.amt{font-weight:800;white-space:nowrap}
+.amt.cr{color:var(--ok)}
+.badge{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--raised);color:var(--muted)}
+.badge.ok{background:rgba(61,219,176,.15);color:var(--ok)}
+.badge.bad{background:rgba(255,107,122,.15);color:var(--bad)}
+.badge.wait{background:rgba(255,176,32,.15);color:var(--accent)}
+
+/* ---------- wallet ---------- */
+.wcard{border-radius:22px;padding:20px;background:linear-gradient(135deg,var(--raised),var(--surface));border:1px solid var(--line);position:relative;overflow:hidden}
+.wcard small{color:var(--muted)}
+.wcard .bal{font-family:var(--display);font-weight:800;font-size:44px;letter-spacing:-1.5px}
+.amts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
+.amts button{padding:11px 0;border-radius:12px;background:var(--surface);border:1px solid var(--line);font-weight:700}
+.amts button.on{border-color:var(--accent);color:var(--accent)}
+.field{width:100%;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px;outline:0}
+.field:focus{border-color:var(--accent)}
+
+/* ---------- stars input ---------- */
+.stars{display:flex;gap:6px;font-size:34px;justify-content:center;margin:6px 0 12px}
+.stars button{color:var(--line);line-height:1}
+.stars button.on{color:var(--accent)}
+
+/* ---------- pay modal / toast ---------- */
+.modal{position:fixed;inset:0;z-index:60;background:rgba(5,7,20,.72);display:flex;align-items:center;justify-content:center;padding:22px}
+.mbox{background:var(--bg);border:1px solid var(--line);border-radius:24px;padding:24px 20px 20px;width:100%;max-width:360px;text-align:center;box-shadow:var(--shadow)}
+.mbox h2{font-size:21px;margin:12px 0 4px}
+.mbox p{color:var(--muted);margin-bottom:16px}
+.mic{width:60px;height:60px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;background:var(--raised)}
+.mic svg{width:30px;height:30px}
+.mic.ok{background:rgba(61,219,176,.16);color:var(--ok)}
+.mic.bad{background:rgba(255,107,122,.16);color:var(--bad)}
+.mic .spin{width:30px;height:30px}
+#toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translate(-50%,20px);z-index:80;background:var(--text);color:var(--bg);padding:11px 16px;border-radius:12px;font-weight:600;font-size:14px;opacity:0;pointer-events:none;transition:.2s;max-width:88%;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+
+.av{width:62px;height:62px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--display);font-weight:800;font-size:26px;color:#fff;flex:none}
+.kv{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:14px}
+.kv div{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+.kv b{display:block;font-family:var(--display);font-size:20px}
+.kv span{font-size:12px;color:var(--muted)}
+.reflink{word-break:break-all;font-size:13px;background:var(--raised);padding:10px 12px;border-radius:10px;margin:10px 0}
+.seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:3px;margin-bottom:6px}
+.seg button{flex:1;padding:9px;border-radius:9px;font-weight:700;color:var(--muted);font-size:14px}
+.seg button.on{background:var(--raised);color:var(--text)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation-duration:.01ms!important}}
+</style>
+</head>
+<body>
+
+<div id="splash" class="splash">
+  <div class="logo">ORVIX <b>STORE</b></div>
+  <div class="spin"></div>
+  <p id="splashMsg">Store khul raha hai…</p>
+</div>
+
+<div id="app" class="hide"></div>
+<nav id="tabs" class="tabs hide"></nav>
+<div id="layer"></div>
+<div id="toast"></div>
+
+<script>
+(function(){
+'use strict';
+
+/* ===================== CONFIG ===================== */
+// Backend (Render). The same URL also serves this file at /app.
+const API_BASE = 'https://xstore-za0x.onrender.com';
+
+/* ===================== TELEGRAM ===================== */
+const tg = window.Telegram && window.Telegram.WebApp;
+const INIT = tg ? tg.initData : '';
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch(e){}
+  document.documentElement.dataset.theme = tg.colorScheme === 'light' ? 'light' : 'dark';
+  try {
+    const cs = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+    tg.setHeaderColor(cs); tg.setBackgroundColor(cs);
+  } catch(e){}
+}
+const haptic = (t) => { try { tg && tg.HapticFeedback && (t==='ok'||t==='err' ? tg.HapticFeedback.notificationOccurred(t==='ok'?'success':'error') : tg.HapticFeedback.impactOccurred('light')); } catch(e){} };
+const openLink = (u) => { try { tg ? tg.openLink(u) : window.open(u,'_blank'); } catch(e){ window.open(u,'_blank'); } };
+const openTg = (u) => { try { tg ? tg.openTelegramLink(u) : window.open(u,'_blank'); } catch(e){ window.open(u,'_blank'); } };
+
+/* ===================== HELPERS ===================== */
+const $ = (s, r) => (r||document).querySelector(s);
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const rs = (n) => '₹' + (Math.round(Number(n || 0) * 100) / 100).toLocaleString('en-IN');
+const dt = (ts) => new Date(ts).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
+const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+const IC = {
+  store:'<path d="M3 9l1.5-5h15L21 9M3 9v11h18V9M3 9c0 1.7 1.3 3 3 3s3-1.3 3-3c0 1.7 1.3 3 3 3s3-1.3 3-3c0 1.7 1.3 3 3 3s3-1.3 3-3"/>',
+  gift:'<path d="M20 12v9H4v-9M2 7h20v5H2zM12 21V7M12 7H8a2.5 2.5 0 110-5c2 0 4 3 4 5zm0 0h4a2.5 2.5 0 100-5c-2 0-4 3-4 5z"/>',
+  bag:'<path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0"/>',
+  wallet:'<path d="M3 7a2 2 0 012-2h13v4M3 7v11a2 2 0 002 2h15a1 1 0 001-1v-4M3 7a2 2 0 002 2h16v5h-4a2 2 0 010-4h4"/>',
+  user:'<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  crown:'<path d="M3 8l4 4 5-7 5 7 4-4-2 11H5z"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  x:'<path d="M18 6L6 18M6 6l12 12"/>',
+  share:'<path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7M16 6l-4-4-4 4M12 2v13"/>',
+  down:'<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  ext:'<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>'
+};
+const ico = (n, extra) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra||''}>${IC[n]}</svg>`;
+
+let toastT;
+function toast(msg, kind) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  if (kind) haptic(kind);
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* ===================== API ===================== */
+class GateError extends Error {}
+async function api(path, body, timeoutMs) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs || 30000);
+  try {
+    const r = await fetch(API_BASE + '/api/mini' + path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Init-Data': INIT },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    const j = await r.json().catch(() => ({ ok:false, error:'Server se sahi response nahi aaya.' }));
+    if (!j.ok && ['JOIN_REQUIRED','MAINTENANCE','BANNED','AUTH'].includes(j.code)) { showGate(j); throw new GateError(j.code); }
+    return j;
+  } finally { clearTimeout(to); }
+}
+
+/* ===================== STATE ===================== */
+const S = { user:null, products:[], categories:[], settings:{}, botUsername:'', isAdmin:false,
+            tab:'store', cat:'All', q:'', orders:null, wallet:null, lb:null, startParam:'', topupAmt:100 };
+const P = { id:null, data:null, coupon:null, busy:false };   // open product sheet
+let PAY = null;                                              // active payment
+
+/* ===================== BOOT ===================== */
+async function boot() {
+  if (!tg || !INIT) {
+    $('#splash').innerHTML = '<div class="logo">ORVIX <b>STORE</b></div><p>Yeh Mini App Telegram ke andar chalta hai. Bot kholo aur menu se <b>ORVIX STORE</b> dabao.</p>';
+    return;
+  }
+  let lastErr = '';
+  for (let i = 0; i < 4; i++) {
+    try {
+      if (i > 0) $('#splashMsg').textContent = 'Server jag raha hai, 20-30 sec lag sakte hain…';
+      const j = await api('/bootstrap', undefined, 45000);
+      if (j.ok) { applyBootstrap(j); return start(); }
+      lastErr = j.error || 'Load nahi ho paya';
+      break;
+    } catch (e) {
+      if (e instanceof GateError) return;
+      lastErr = 'Server se connect nahi ho paya.';
+      await wait(1500);
+    }
+  }
+  $('#splash').innerHTML = `<div class="logo">ORVIX <b>STORE</b></div><p>${esc(lastErr)}</p><button class="btn sm" id="retry">Dobara try karo</button>`;
+  $('#retry').onclick = () => location.reload();
+}
+function applyBootstrap(j) {
+  S.user = j.user; S.products = j.products; S.categories = j.categories; S.settings = j.settings;
+  S.botUsername = j.botUsername; S.isAdmin = j.isAdmin; S.startParam = j.startParam || '';
+}
+async function refresh() {
+  try { const j = await api('/bootstrap'); if (j.ok) { applyBootstrap(j); renderTab(); } } catch(e){}
+}
+function start() {
+  $('#splash').classList.add('hide');
+  $('#app').classList.remove('hide');
+  $('#tabs').classList.remove('hide');
+  renderTabs(); renderTab();
+  if (S.startParam.startsWith('PROD_')) openProduct(S.startParam.slice(5));
+}
+
+/* ===================== GATES ===================== */
+function showGate(j) {
+  $('#splash').classList.remove('hide');
+  $('#app').classList.add('hide'); $('#tabs').classList.add('hide');
+  const s = $('#splash'); s.className = 'splash gate';
+  if (j.code === 'JOIN_REQUIRED') {
+    s.innerHTML = `<div class="logo">ORVIX <b>STORE</b></div><h2>Pehle channel join karo</h2><p>Store use karne ke liye neeche ke channels join karna zaroori hai.</p>
+      <div class="ch">${(j.channels||[]).map(c => `<button class="btn alt" data-act="joinch" data-u="${esc(c.username)}">${esc(c.label || c.username)} ${ico('ext')}</button>`).join('')}
+      <button class="btn" data-act="reload">Maine join kar liya</button></div>`;
+  } else if (j.code === 'MAINTENANCE') {
+    s.innerHTML = `<div class="logo">ORVIX <b>STORE</b></div><h2>Maintenance chal rahi hai</h2><p>${esc(j.error)}</p><button class="btn sm" data-act="reload">Dobara check karo</button>`;
+  } else if (j.code === 'BANNED') {
+    s.innerHTML = `<div class="logo">ORVIX <b>STORE</b></div><h2>Access blocked</h2><p>${esc(j.error)}</p>`;
+  } else {
+    s.innerHTML = `<div class="logo">ORVIX <b>STORE</b></div><p>${esc(j.error)}</p>`;
+  }
+}
+
+/* ===================== TABS ===================== */
+const TABS = [['store','Store','store'],['free','Free','gift'],['orders','Orders','bag'],['wallet','Wallet','wallet'],['me','Profile','user']];
+function renderTabs() {
+  $('#tabs').innerHTML = TABS.map(([k,l,i]) => `<button class="tab ${S.tab===k?'on':''}" data-act="tab" data-k="${k}">${ico(i)}<span>${l}</span></button>`).join('');
+}
+function renderTab() {
+  const v = { store:viewStore, free:viewFree, orders:viewOrders, wallet:viewWallet, me:viewMe }[S.tab];
+  const keepScroll = window.scrollY;
+  v();
+  window.scrollTo(0, keepScroll);
+}
+function setTab(k) {
+  S.tab = k; renderTabs(); $('#app').scrollTop = 0; window.scrollTo(0,0); renderTab(); haptic();
+}
+
+/* ===================== COMPONENTS ===================== */
+function header() {
+  const u = S.user;
+  return `<div class="top">
+    <div class="hello"><small>${u.isVip ? 'VIP member' : 'Welcome'}</small>${esc(u.name || 'Friend')}</div>
+    <button class="pill" data-act="tab" data-k="wallet">${u.isVip ? ico('crown') : ico('wallet')}${rs(u.balance)}</button>
+  </div>`;
+}
+function phStyle(name) { return `background:linear-gradient(135deg,hsl(${hue(name)} 65% 45%),hsl(${(hue(name)+50)%360} 65% 28%))`; }
+function thumb(p) {
+  const ph = `<div class="ph" style="${phStyle(p.name)}">${esc((p.name||'?').trim().charAt(0).toUpperCase())}</div>`;
+  const img = p.images && p.images.length ? `<img src="${API_BASE}${esc(p.images[0])}" alt="" loading="lazy" onerror="this.remove()">` : '';
+  return ph + img;
+}
+function card(p) {
+  const free = p.price === 0;
+  const vipFree = !free && S.user.isVip;
+  const tag = free ? '<span class="tag free">FREE</span>' : vipFree ? '<span class="tag free">VIP FREE</span>' : `<span class="tag">${rs(p.price)}</span>`;
+  const rating = p.reviewCount ? `<span class="star">★</span> ${p.rating.toFixed(1)} <span>(${p.reviewCount})</span>` : `<span>${esc(p.category)}</span>`;
+  return `<button class="card" data-act="product" data-id="${esc(p.id)}">
+    <div class="thumb">${thumb(p)}${tag}${p.soldOut ? '<div class="sold">Sold out</div>' : ''}</div>
+    <div class="cbody"><div class="cname">${esc(p.name)}</div><div class="cmeta">${rating}</div></div></button>`;
+}
+function filtered(freeOnly) {
+  const q = S.q.trim().toLowerCase();
+  return S.products.filter(p =>
+    (freeOnly ? p.price === 0 : true) &&
+    (S.cat === 'All' || p.category === S.cat) &&
+    (!q || p.name.toLowerCase().includes(q) || (p.description||'').toLowerCase().includes(q)));
+}
+function searchBar() {
+  return `<label class="search">${ico('search')}<input id="q" type="search" placeholder="Products search karo" value="${esc(S.q)}" autocomplete="off"></label>
+  <div class="chips">${['All', ...S.categories].map(c => `<button class="chip ${S.cat===c?'on':''}" data-act="cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>`;
+}
+
+/* ===================== VIEWS ===================== */
+function viewStore() {
+  const list = filtered(false);
+  const browsing = S.cat === 'All' && !S.q.trim();
+  const fresh = S.products.slice(0, 6);
+  const pro = S.settings.pro;
+  let h = header() + searchBar();
+  if (browsing && fresh.length > 1) {
+    h += `<div class="sec"><h3>Naye products</h3><div class="rail">${fresh.map(card).join('')}</div></div>`;
+  }
+  if (browsing && pro && pro.active && !S.user.isVip) {
+    h += `<button class="pro" data-act="pro">${ico('crown')}<div><b>VIP ban jao — sab kuch free</b><span>${rs(pro.price)} mein ${pro.durationDays} din unlimited downloads</span></div></button>`;
+  }
+  h += `<div class="sec"><h3>${browsing ? 'Sab products' : 'Results'}<span>${list.length} items</span></h3>${
+    list.length ? `<div class="grid">${list.map(card).join('')}</div>` : '<div class="empty"><b>Kuch nahi mila</b>Search ya category badal ke dekho.</div>'}</div>`;
+  mount(h);
+}
+function viewFree() {
+  const list = filtered(true);
+  mount(header() + searchBar() + `<div class="sec"><h3>Free products<span>${list.length} items</span></h3>${
+    list.length ? `<div class="grid">${list.map(card).join('')}</div>` : '<div class="empty"><b>Abhi koi free product nahi</b>Jaldi naye aayenge.</div>'}</div>`);
+}
+async function viewOrders() {
+  mount(header() + '<div class="sec"><h3>Mere orders</h3><div class="empty"><div class="spin" style="margin:0 auto"></div></div></div>');
+  if (!S.orders) { try { const j = await api('/orders'); if (j.ok) S.orders = j.orders; } catch(e){ return; } }
+  if (S.tab !== 'orders') return;
+  const mine = (S.orders || []).filter(o => o.kind === 'product' && (o.status === 'paid' || o.status === 'delivered'));
+  const other = (S.orders || []).filter(o => !mine.includes(o));
+  let h = header() + `<div class="sec"><h3>Meri purchases<span>${mine.length}</span></h3>`;
+  h += mine.length ? `<div class="box" style="padding:4px 16px">${mine.map(o => `
+    <div class="li"><div class="grow"><div class="t">${esc(o.name)}</div><div class="s">${dt(o.createdAt)} · ${o.amount ? rs(o.amount) : 'Free'}${o.refundStatus ? ' · Refund ' + esc(o.refundStatus) : ''}</div></div>
+      ${o.link ? `<button class="btn sm alt" data-act="openlink" data-u="${esc(o.link)}">${ico('ext')}</button>` : ''}
+      <button class="btn sm" data-act="redeliver" data-id="${esc(o.id)}">${ico('down')}</button>
+      ${o.productExists ? `<button class="btn sm alt" data-act="product" data-id="${esc(o.productId)}">Open</button>` : ''}
+    </div>${o.amount > 0 && !o.refundStatus ? `<div style="margin:-6px 0 8px"><button class="muted" style="font-size:12.5px;text-decoration:underline" data-act="refund" data-id="${esc(o.id)}">Refund request</button></div>` : ''}`).join('')}</div>`
+    : '<div class="empty"><b>Abhi tak kuch nahi kharida</b>Store se koi product choose karo.</div>';
+  h += '</div>';
+  if (other.length) {
+    h += `<div class="sec"><h3>Baaki activity</h3><div class="box" style="padding:4px 16px">${other.map(o => {
+      const st = o.status === 'pending' ? ['wait','Pending'] : o.status === 'refunded' ? ['ok','Refunded'] : ['bad','Failed'];
+      return `<div class="li"><div class="grow"><div class="t">${esc(o.name)}</div><div class="s">${dt(o.createdAt)} · ${rs(o.amount)}</div></div><span class="badge ${st[0]}">${st[1]}</span></div>`;
+    }).join('')}</div></div>`;
+  }
+  mount(h);
+}
+async function viewWallet() {
+  const draw = () => {
+    const u = S.user, ci = S.settings.checkIn || {};
+    const amts = [50,100,200,500];
+    let h = header() + `<div class="sec"><div class="wcard"><small>Wallet balance</small><div class="bal">${rs(u.balance)}</div>
+      <div class="amts">${amts.map(a => `<button class="${S.topupAmt===a?'on':''}" data-act="amt" data-a="${a}">₹${a}</button>`).join('')}</div>
+      <div class="row" style="margin-top:10px"><input id="topupCustom" class="field" type="number" inputmode="numeric" min="10" placeholder="Ya amount likho (min ₹10)" value="${amts.includes(S.topupAmt)?'':S.topupAmt}"></div>
+      <button class="btn" style="margin-top:12px" data-act="topup">Add ${rs(S.topupAmt)} via UPI</button></div></div>`;
+    if (ci.active) {
+      h += `<div class="sec"><div class="box row between"><div><b>Daily check-in</b><div class="muted" style="font-size:13px">${u.checkedInToday ? 'Aaj ka reward le liya ✓' : 'Roz reward lo, streak badhao'}${u.streak ? ' · ' + u.streak + ' din streak' : ''}</div></div>
+        <button class="btn sm ${u.checkedInToday?'alt':''}" data-act="checkin" ${u.checkedInToday?'disabled':''}>${u.checkedInToday ? 'Done' : 'Claim'}</button></div></div>`;
+    }
+    h += `<div class="sec"><h3>History</h3>${
+      S.wallet && S.wallet.length
+        ? `<div class="box" style="padding:4px 16px">${S.wallet.map(t => `<div class="li"><div class="grow"><div class="t">${esc(String(t.reason||'').replace(/_/g,' '))}</div><div class="s">${dt(t.createdAt)}</div></div><div class="amt ${t.type==='credit'?'cr':''}">${t.type==='credit'?'+':'−'}${rs(t.amount)}</div></div>`).join('')}</div>`
+        : '<div class="empty"><b>Koi transaction nahi</b>Add money karte hi yahan dikhega.</div>'}</div>`;
+    mount(h);
+  };
+  draw();
+  try { const j = await api('/wallet'); if (j.ok) { S.wallet = j.transactions; S.user.balance = j.balance; if (S.tab === 'wallet') draw(); } } catch(e){}
+}
+function viewMe() {
+  const u = S.user, st = S.settings, r = st.referral || {};
+  const bonus = r.bonusType === 'percent' ? `${r.bonusAmount}%` : rs(r.bonusAmount);
+  let h = header() + `<div class="sec"><div class="box"><div class="row"><div class="av" style="background:linear-gradient(135deg,hsl(${hue(u.id)} 65% 48%),hsl(${(hue(u.id)+50)%360} 65% 30%))">${esc((u.name||'U').charAt(0).toUpperCase())}</div>
+    <div><div style="font-family:var(--display);font-weight:800;font-size:20px">${esc(u.name)}</div><div class="muted">${u.username ? '@' + esc(u.username) : 'ID ' + esc(u.id)}</div>
+    ${u.isVip ? `<span class="badge ok" style="margin-top:4px">VIP · ${u.vipDaysLeft} din bache</span>` : ''}</div></div>
+    <div class="kv"><div><b>${u.totalOrders}</b><span>Orders</span></div><div><b>${rs(u.totalSpent)}</b><span>Spent</span></div><div><b>${u.referredCount}</b><span>Referrals</span></div></div></div></div>`;
+  if (st.pro && st.pro.active) {
+    h += `<button class="pro" data-act="pro">${ico('crown')}<div><b>${u.isVip ? 'VIP extend karo' : 'VIP plan'}</b><span>${rs(st.pro.price)} · ${st.pro.durationDays} din · sab paid products free</span></div></button>`;
+  }
+  if (u.referralLink) {
+    h += `<div class="sec"><div class="box"><b>Dosto ko invite karo</b><div class="muted" style="font-size:13.5px;margin-top:2px">Dost ki pehli purchase par aapko ${bonus} wallet mein milega.</div>
+      <div class="reflink">${esc(u.referralLink)}</div><div class="row"><button class="btn" data-act="shareref">${ico('share')} Share</button><button class="btn alt" data-act="copyref">Copy</button></div></div></div>`;
+  }
+  h += `<div class="sec"><div class="stack"><button class="btn alt" data-act="lb">Leaderboard</button>`;
+  if (st.supportTelegram) h += `<button class="btn alt" data-act="tglink" data-u="https://t.me/${esc(st.supportTelegram.replace('@',''))}">Support — Telegram</button>`;
+  if (st.supportWhatsapp) h += `<button class="btn alt" data-act="openlink" data-u="https://wa.me/${esc(st.supportWhatsapp.replace(/[^0-9]/g,''))}">Support — WhatsApp</button>`;
+  (st.customButtons || []).forEach(b => { h += `<button class="btn alt" data-act="openlink" data-u="${esc(b.url)}">${esc(b.text)}</button>`; });
+  h += `<button class="btn ghost" data-act="tgclose">Bot chat par wapas jao</button></div></div>`;
+  mount(h);
+}
+function mount(html) {
+  const keepQ = document.activeElement && document.activeElement.id === 'q';
+  $('#app').innerHTML = html;
+  if (keepQ) { const i = $('#q'); if (i) { i.focus(); const l = i.value.length; i.setSelectionRange(l, l); } }
+}
+
+/* ===================== SHEET ===================== */
+function openSheet(inner, foot) {
+  closeSheet(true);
+  const L = $('#layer');
+  L.insertAdjacentHTML('beforeend', `<div class="backdrop" id="bd" data-act="closesheet"></div>
+    <div class="sheet" id="sh" role="dialog" aria-modal="true"><div class="grab"></div><div class="sbody" id="sb">${inner}</div>${foot ? `<div class="sfoot" id="sf">${foot}</div>` : ''}</div>`);
+  requestAnimationFrame(() => { $('#bd').classList.add('show'); $('#sh').classList.add('show'); });
+  if (tg) { tg.BackButton.show(); tg.BackButton.offClick(closeSheet); tg.BackButton.onClick(closeSheet); }
+}
+function closeSheet(instant) {
+  const sh = $('#sh'), bd = $('#bd');
+  if (!sh) return;
+  P.id = null;
+  if (instant === true) { sh.remove(); bd && bd.remove(); }
+  else {
+    sh.classList.remove('show'); bd && bd.classList.remove('show');
+    setTimeout(() => { sh.remove(); bd && bd.remove(); }, 230);
+  }
+  if (tg && !PAY) { tg.BackButton.hide(); }
+}
+
+/* ===================== PRODUCT ===================== */
+async function openProduct(id) {
+  haptic();
+  P.id = id; P.data = null; P.coupon = null; P.busy = false;
+  const base = S.products.find(p => p.id === id);
+  openSheet(`<div class="empty"><div class="spin" style="margin:0 auto 12px"></div>${esc(base ? base.name : 'Loading…')}</div>`);
+  let j;
+  try { j = await api('/product/' + encodeURIComponent(id)); } catch(e) { closeSheet(); return; }
+  if (P.id !== id) return;
+  if (!j.ok) { closeSheet(); return toast(j.error || 'Product nahi mila', 'err'); }
+  P.data = j; drawProduct();
+}
+function drawProduct() {
+  const { product:p, reviews, owned, canReview } = P.data;
+  const u = S.user, free = p.price === 0, vip = !free && u.isVip;
+  const final = free || vip ? 0 : (P.coupon ? P.coupon.final : p.price);
+  const phd = `<div class="ph" style="${phStyle(p.name)}">${esc(p.name.charAt(0).toUpperCase())}</div>`;
+  const gal = p.images.length
+    ? `<div class="gal" id="gal">${p.images.map(src => `<div class="slide">${phd}<img src="${API_BASE}${esc(src)}" alt="" onerror="this.remove()"></div>`).join('')}</div>
+       ${p.images.length > 1 ? `<div class="dots" id="dots">${p.images.map((_,i) => `<i class="${i?'':'on'}"></i>`).join('')}</div>` : ''}`
+    : `<div class="gal"><div class="slide">${phd}</div></div>`;
+
+  const stars = p.reviewCount ? `<span><span class="star">★</span> ${p.rating.toFixed(1)} (${p.reviewCount})</span>` : '';
+  const stock = p.stock !== -1 ? `<span>${p.soldOut ? 'Out of stock' : p.stock + ' bache'}</span>` : '';
+
+  let body = `${gal}<div style="margin-top:12px"><h2>${esc(p.name)}</h2>
+    <div class="facts"><span>${esc(p.category)}</span>${stars}${stock}<span>${p.views} views</span></div>
+    <div class="desc">${esc(p.description)}</div>
+    ${p.customButtonText && p.customButtonUrl ? `<button class="btn alt" style="margin-top:12px" data-act="openlink" data-u="${esc(p.customButtonUrl)}">${esc(p.customButtonText)} ${ico('ext')}</button>` : ''}</div>`;
+
+  body += `<div style="margin-top:20px"><div class="row between" style="margin-bottom:6px"><b style="font-family:var(--display);font-size:17px">Reviews</b>${canReview ? '<button class="btn sm alt" data-act="review">Review likho</button>' : ''}</div>${
+    reviews.length ? reviews.map(r => `<div class="review"><div class="row between"><b>${esc(r.name)}</b><span class="star">${'★'.repeat(r.rating)}<span style="color:var(--line)">${'★'.repeat(5 - r.rating)}</span></span></div>${r.comment ? `<p>${esc(r.comment)}</p>` : ''}</div>`).join('') : '<div class="muted" style="padding:8px 0">Abhi koi review nahi.</div>'}</div>`;
+
+  let foot;
+  if (owned) {
+    foot = `<div class="row"><button class="btn" data-act="redeliver" data-id="${esc(P.data.orderId)}">${ico('down')} Dobara bhejo</button><button class="btn alt" style="width:auto" data-act="shareprod" aria-label="Share">${ico('share')}</button></div>`;
+  } else if (p.soldOut) {
+    foot = '<button class="btn" disabled>Out of stock</button>';
+  } else if (free) {
+    foot = `<div class="row between" style="margin-bottom:10px"><span class="price">Free</span></div><button class="btn ok" data-act="buy" data-m="free">Free mein lo</button>`;
+  } else if (vip) {
+    foot = `<div class="row between" style="margin-bottom:10px"><span class="price">VIP free<s>${rs(p.price)}</s></span></div><button class="btn ok" data-act="buy" data-m="free">${ico('crown')} VIP se free lo</button>`;
+  } else {
+    const enough = u.balance >= final;
+    foot = `<div class="row between"><span class="price">${rs(final)}${P.coupon ? `<s>${rs(p.price)}</s>` : ''}</span><button class="btn alt sm" data-act="shareprod" aria-label="Share">${ico('share')}</button></div>
+      <div class="coupon"><input id="cpn" placeholder="Coupon code" value="${P.coupon ? esc(P.coupon.code) : ''}" ${P.coupon ? 'readonly' : ''} autocapitalize="characters"><button class="btn alt sm" data-act="${P.coupon ? 'rmcoupon' : 'coupon'}">${P.coupon ? 'Hatao' : 'Apply'}</button></div>
+      ${P.coupon ? `<div class="note ok">${esc(P.coupon.code)} lag gaya — ${rs(P.coupon.discount)} off</div>` : ''}
+      <div class="stack" style="margin-top:12px">
+        ${final === 0 ? '<button class="btn ok" data-act="buy" data-m="upi">Free mein lo</button>' : `
+        <button class="btn" data-act="buy" data-m="upi">UPI se ${rs(final)} pay karo</button>
+        <button class="btn alt" data-act="buy" data-m="wallet">${enough ? `Wallet se pay karo (${rs(u.balance)})` : `Wallet balance kam hai (${rs(u.balance)})`}</button>`}
+      </div>`;
+  }
+  const sb = $('#sb'), sf = $('#sf');
+  sb.innerHTML = body;
+  if (sf) sf.innerHTML = foot; else $('#sh').insertAdjacentHTML('beforeend', `<div class="sfoot" id="sf">${foot}</div>`);
+  const g = $('#gal'), d = $('#dots');
+  if (g && d) g.addEventListener('scroll', () => { const i = Math.round(g.scrollLeft / g.clientWidth); [...d.children].forEach((x, k) => x.classList.toggle('on', k === i)); }, { passive:true });
+}
+
+async function doBuy(method) {
+  if (P.busy || !P.data) return;
+  P.busy = true;
+  const p = P.data.product;
+  const btns = document.querySelectorAll('#sf .btn'); btns.forEach(b => b.setAttribute('disabled',''));
+  try {
+    const j = await api('/buy', { productId: p.id, method, coupon: P.coupon ? P.coupon.code : undefined }, 45000);
+    if (!j.ok) {
+      if (j.code === 'LOW_BALANCE') { toast(j.error, 'err'); closeSheet(); setTab('wallet'); S.topupAmt = Math.max(10, Math.ceil((j.need || 100) - (j.balance || 0))); renderTab(); return; }
+      toast(j.error || 'Kuch galat ho gaya', 'err'); return;
+    }
+    if (j.status === 'owned') { toast('Yeh product aapke paas pehle se hai'); P.data.owned = true; drawProduct(); return; }
+    if (j.status === 'pending') {
+      startPay({ orderId: j.orderId, url: j.paymentUrl, kind:'product', amount: j.amount, title: p.name });
+      return;
+    }
+    // instant delivery (free / VIP / wallet)
+    if (typeof j.balance === 'number') S.user.balance = j.balance;
+    S.orders = null;
+    showDone({ title: p.name, delivered: j.delivered, link: j.link, kind:'product' });
+    P.data.owned = true; P.data.orderId = j.orderId; P.data.canReview = true;
+    refresh();
+  } catch(e) { if (!(e instanceof GateError)) toast('Network error, dobara try karo', 'err'); }
+  finally { P.busy = false; if ($('#sf') && P.data && !P.data.owned) btns.forEach(b => b.removeAttribute('disabled')); }
+}
+
+/* ===================== PAYMENT FLOW ===================== */
+function startPay(o) {
+  stopPay();
+  PAY = Object.assign({ started: Date.now(), timer: null, busy: false }, o);
+  drawPay('wait');
+  openLink(o.url);
+  PAY.timer = setInterval(() => checkPay(false), 3500);
+}
+function stopPay() { if (PAY && PAY.timer) clearInterval(PAY.timer); }
+function drawPay(state, extra) {
+  let m = $('#pm'); if (!m) { $('#layer').insertAdjacentHTML('beforeend', '<div class="modal" id="pm"><div class="mbox" id="pb"></div></div>'); m = $('#pm'); }
+  const t = PAY ? PAY.title : '';
+  const a = PAY ? rs(PAY.amount) : '';
+  let h = '';
+  if (state === 'wait') {
+    h = `<div class="mic"><div class="spin"></div></div><h2>Payment ka wait...</h2><p>${esc(t)} · ${a}<br>Payment page par pay karo, confirm hote hi yahan update ho jayega.</p>
+      <div class="stack"><button class="btn" data-act="paycheck">Maine pay kar diya</button><button class="btn alt" data-act="payreopen">${ico('ext')} Payment page kholo</button><button class="btn ghost" data-act="paycancel">Cancel</button></div>`;
+  } else if (state === 'fail') {
+    h = `<div class="mic bad">${ico('x')}</div><h2>Payment nahi hui</h2><p>${esc(extra || 'Order fail ya expire ho gaya. Paisa kata ho to support se contact karo.')}</p><button class="btn" data-act="payclose">Theek hai</button>`;
+  } else if (state === 'timeout') {
+    h = `<div class="mic bad">${ico('x')}</div><h2>Confirm nahi hua</h2><p>Agar paisa kat gaya hai to thodi der baad Orders tab check karo ya support se contact karo.</p><button class="btn" data-act="payclose">Theek hai</button>`;
+  }
+  $('#pb').innerHTML = h;
+}
+async function checkPay(manual) {
+  if (!PAY || PAY.busy) return;
+  if (Date.now() - PAY.started > 15 * 60 * 1000) { stopPay(); return drawPay('timeout'); }
+  PAY.busy = true;
+  try {
+    const j = await api('/order/' + PAY.orderId);
+    if (!PAY) return;
+    if (j.ok && (j.status === 'paid' || j.status === 'delivered')) {
+      const o = PAY; stopPay(); PAY = null; $('#pm') && $('#pm').remove();
+      if (j.user) S.user = j.user;
+      S.orders = null; S.wallet = null;
+      closeSheet(true);
+      if (o.kind === 'topup') { showDone({ title: `${rs(o.amount)} wallet mein add ho gaye`, kind:'topup' }); }
+      else if (o.kind === 'pro') { showDone({ title: 'VIP activate ho gaya', kind:'pro' }); }
+      else { showDone({ title: o.title, delivered: true, link: j.link, kind:'product' }); }
+      refresh();
+    } else if (j.ok && j.status === 'failed') {
+      stopPay(); drawPay('fail');
+    } else if (manual) toast('Abhi payment confirm nahi hua, thodi der wait karo.');
+  } catch(e) { /* keep polling */ }
+  finally { if (PAY) PAY.busy = false; }
+}
+async function cancelPay() {
+  if (!PAY) return;
+  const id = PAY.orderId; stopPay(); PAY = null; $('#pm') && $('#pm').remove();
+  try { await api('/order/' + id + '/cancel', {}); } catch(e){}
+  if (tg && !$('#sh')) tg.BackButton.hide();
+}
+function closePay() { stopPay(); PAY = null; $('#pm') && $('#pm').remove(); if (tg && !$('#sh')) tg.BackButton.hide(); }
+
+function showDone(o) {
+  let m = $('#pm'); if (!m) { $('#layer').insertAdjacentHTML('beforeend', '<div class="modal" id="pm"><div class="mbox" id="pb"></div></div>'); }
+  let msg = '';
+  if (o.kind === 'product') {
+    msg = o.delivered ? 'Bot chat mein bhej diya gaya hai. Orders tab se kabhi bhi dobara download kar sakte ho.'
+                      : 'Purchase ho gayi, lekin chat mein bhej nahi paye. Bot mein /start dabao, phir Orders tab se download karo.';
+  } else if (o.kind === 'topup') msg = 'Ab aap wallet se kisi bhi product ko kharid sakte ho.';
+  else msg = 'Ab sab paid products free mein download kar sakte ho.';
+  $('#pb').innerHTML = `<div class="mic ok">${ico('check')}</div><h2>${o.kind==='product' ? 'Mil gaya!' : 'Ho gaya!'}</h2><p><b>${esc(o.title)}</b><br>${esc(msg)}</p>
+    <div class="stack">${o.link ? `<button class="btn" data-act="openlink" data-u="${esc(o.link)}">${ico('ext')} Link kholo</button>` : ''}
+    ${o.kind==='product' ? '<button class="btn alt" data-act="tgclose">Bot chat dekho</button>' : ''}<button class="btn ${o.link?'ghost':''}" data-act="payclose">Store par raho</button></div>`;
+  haptic('ok');
+}
+
+/* ===================== OTHER FLOWS ===================== */
+async function doTopup() {
+  const inp = $('#topupCustom'); if (inp && inp.value) S.topupAmt = parseInt(inp.value, 10) || S.topupAmt;
+  const amount = S.topupAmt;
+  if (!(amount >= 10)) return toast('Minimum ₹10 add kar sakte ho', 'err');
+  try {
+    const j = await api('/topup', { amount }, 40000);
+    if (!j.ok) return toast(j.error, 'err');
+    startPay({ orderId: j.orderId, url: j.paymentUrl, kind:'topup', amount: j.amount, title: 'Wallet top-up' });
+  } catch(e) { if (!(e instanceof GateError)) toast('Network error', 'err'); }
+}
+async function doPro() {
+  const pro = S.settings.pro;
+  openSheet(`<h2>VIP plan</h2><div class="muted" style="margin:6px 0 14px">${esc(pro.description || '')}</div>
+    <div class="box stack" style="gap:8px"><div>✅ ${pro.durationDays} din unlimited downloads</div><div>✅ Koi bhi paid product free</div><div>✅ Wallet balance ki zaroorat nahi</div><div>✅ Naye products bhi free</div></div>
+    <div class="note muted" style="margin-top:12px">${esc(S.settings.terms || '')}</div>`,
+    `<div class="row between" style="margin-bottom:10px"><span class="price">${rs(pro.price)}</span><span class="muted">${pro.durationDays} din</span></div><button class="btn" data-act="propay">${S.user.isVip ? 'Extend karo' : 'VIP lo'} — UPI se pay</button>`);
+}
+async function doProPay() {
+  try {
+    const j = await api('/pro', {}, 40000);
+    if (!j.ok) return toast(j.error, 'err');
+    closeSheet(true);
+    startPay({ orderId: j.orderId, url: j.paymentUrl, kind:'pro', amount: j.amount, title: 'VIP plan' });
+  } catch(e) { if (!(e instanceof GateError)) toast('Network error', 'err'); }
+}
+async function doCheckin() {
+  try {
+    const j = await api('/checkin', {});
+    if (j.success) { toast(`+${rs(j.bonus)} mila · ${j.streak} din streak 🔥`, 'ok'); S.user.balance = j.balance; S.user.checkedInToday = true; S.user.streak = j.streak; S.wallet = null; }
+    else if (j.reason === 'already_checked_in') { S.user.checkedInToday = true; toast('Aaj ka check-in ho chuka hai'); }
+    else toast('Check-in abhi available nahi hai');
+    renderTab();
+  } catch(e) {}
+}
+function doReview() {
+  let rating = 0;
+  openSheet(`<h2>Review likho</h2><div class="muted" style="margin:4px 0 8px">${esc(P.data ? P.data.product.name : '')}</div>
+    <div class="stars" id="stars">${[1,2,3,4,5].map(n => `<button data-act="star" data-n="${n}" aria-label="${n} star">★</button>`).join('')}</div>
+    <textarea id="rc" class="field" rows="4" maxlength="300" placeholder="Experience kaisa raha? (optional)"></textarea>`,
+    `<button class="btn" data-act="sendreview">Review bhejo</button>`);
+  $('#sh')._rating = () => rating;
+  $('#stars').addEventListener('click', e => { const b = e.target.closest('[data-n]'); if (!b) return; rating = +b.dataset.n; [...$('#stars').children].forEach((x,i) => x.classList.toggle('on', i < rating)); haptic(); });
+}
+async function sendReview() {
+  const sh = $('#sh'); const rating = sh && sh._rating ? sh._rating() : 0;
+  if (!rating) return toast('Pehle stars select karo', 'err');
+  const id = P.reviewFor;
+  try {
+    const j = await api('/review', { productId: id, rating, comment: ($('#rc')||{}).value || '' });
+    if (!j.ok) return toast(j.error, 'err');
+    toast('Review mil gaya, thanks!', 'ok');
+    closeSheet(true); openProduct(id);
+  } catch(e){}
+}
+function doRefund(orderId) {
+  openSheet(`<h2>Refund request</h2><div class="muted" style="margin:4px 0 12px">Admin review karke wallet mein refund kar dega.</div>
+    <textarea id="rr" class="field" rows="4" maxlength="300" placeholder="Reason likho"></textarea>`,
+    `<button class="btn" data-act="sendrefund" data-id="${esc(orderId)}">Request bhejo</button>`);
+}
+async function sendRefund(id) {
+  const reason = ($('#rr')||{}).value || '';
+  if (reason.trim().length < 5) return toast('Reason thoda detail mein likho', 'err');
+  try {
+    const j = await api('/refund', { orderId: id, reason });
+    if (!j.ok) return toast(j.error, 'err');
+    toast('Refund request bhej di', 'ok'); S.orders = null; closeSheet(); if (S.tab === 'orders') renderTab();
+  } catch(e){}
+}
+async function doLeaderboard() {
+  openSheet('<div class="empty"><div class="spin" style="margin:0 auto"></div></div>');
+  let j; try { j = await api('/leaderboard'); } catch(e){ return closeSheet(); }
+  if (!j.ok) { closeSheet(); return toast(j.error, 'err'); }
+  let tab = 'b';
+  const draw = () => {
+    const rows = tab === 'b' ? j.buyers.map(b => [b.name, rs(b.totalSpent), b.me]) : j.referrers.map(r => [r.name, r.referralCount + ' invites', r.me]);
+    $('#sb').innerHTML = `<h2 style="margin-bottom:12px">Leaderboard</h2><div class="seg"><button class="${tab==='b'?'on':''}" data-lb="b">Top buyers</button><button class="${tab==='r'?'on':''}" data-lb="r">Top referrers</button></div>
+      ${rows.length ? `<div class="box" style="padding:4px 16px">${rows.map((r,i) => `<div class="li"><b style="width:26px;color:var(--muted)">${i+1}</b><div class="grow t">${esc(r[0])}${r[2] ? ' <span class="badge ok">You</span>' : ''}</div><div class="amt">${esc(r[1])}</div></div>`).join('')}</div>` : '<div class="empty">Abhi koi data nahi.</div>'}`;
+    $('#sb').querySelectorAll('[data-lb]').forEach(b => b.onclick = () => { tab = b.dataset.lb; draw(); });
+  };
+  draw();
+}
+
+/* ===================== EVENTS ===================== */
+const ACT = {
+  tab: d => setTab(d.k),
+  cat: d => { S.cat = d.c; renderTab(); },
+  product: d => openProduct(d.id),
+  closesheet: () => closeSheet(),
+  buy: d => doBuy(d.m),
+  coupon: async () => {
+    const code = ($('#cpn')||{}).value || '';
+    if (!code.trim()) return toast('Coupon code daalo', 'err');
+    const j = await api('/coupon', { code, productId: P.id });
+    if (!j.ok) return toast(j.error, 'err');
+    P.coupon = j; drawProduct(); haptic('ok');
+  },
+  rmcoupon: () => { P.coupon = null; drawProduct(); },
+  shareprod: () => {
+    if (!S.botUsername || !P.data) return;
+    const url = `https://t.me/${S.botUsername}?start=PROD_${P.data.product.id}`;
+    openTg(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(P.data.product.name)}`);
+  },
+  review: () => { P.reviewFor = P.data.product.id; doReview(); },
+  star: () => {},
+  sendreview: sendReview,
+  redeliver: async d => {
+    try { const j = await api('/redeliver', { orderId: d.id }); toast(j.ok ? 'Bot chat mein bhej diya ✅' : j.error, j.ok ? 'ok' : 'err'); } catch(e){}
+  },
+  refund: d => doRefund(d.id),
+  sendrefund: d => sendRefund(d.id),
+  amt: d => { S.topupAmt = +d.a; renderTab(); },
+  topup: doTopup,
+  checkin: doCheckin,
+  pro: doPro,
+  propay: doProPay,
+  paycheck: () => checkPay(true),
+  payreopen: () => PAY && openLink(PAY.url),
+  paycancel: cancelPay,
+  payclose: closePay,
+  lb: doLeaderboard,
+  shareref: () => openTg(`https://t.me/share/url?url=${encodeURIComponent(S.user.referralLink)}&text=${encodeURIComponent('Yahan se digital products lo 🛍')}`),
+  copyref: () => { (navigator.clipboard ? navigator.clipboard.writeText(S.user.referralLink) : Promise.reject()).then(() => toast('Link copy ho gaya', 'ok')).catch(() => toast(S.user.referralLink)); },
+  openlink: d => openLink(d.u),
+  tglink: d => openTg(d.u),
+  tgclose: () => { try { tg.close(); } catch(e){} },
+  joinch: d => openTg('https://t.me/' + String(d.u).replace('@','')),
+  reload: () => location.reload()
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el || el.hasAttribute('disabled')) return;
+  const fn = ACT[el.dataset.act];
+  if (fn) { e.preventDefault(); Promise.resolve(fn(el.dataset, el)).catch(err => { if (!(err instanceof GateError)) console.error(err); }); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'q') { S.q = e.target.value; clearTimeout(window._qt); window._qt = setTimeout(renderTab, 180); }
+  if (e.target.id === 'topupCustom') { const v = parseInt(e.target.value, 10); if (v) { S.topupAmt = v; const b = document.querySelector('.wcard .btn'); if (b) b.textContent = `Add ${rs(v)} via UPI`; document.querySelectorAll('.amts button').forEach(x => x.classList.remove('on')); } }
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && PAY) checkPay(false); });
+
+boot();
+})();
+</script>
+</body>
+</html>
