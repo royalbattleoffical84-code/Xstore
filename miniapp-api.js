@@ -66,7 +66,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     try { await fn(req, res); }
     catch (err) {
       console.error('MiniApp API error:', req.method, req.path, err);
-      if (!res.headersSent) res.status(500).json({ ok: false, error: 'Server error, thodi der baad try karo.' });
+      if (!res.headersSent) res.status(500).json({ ok: false, code: 'SERVER', error: 'Server error' });
     }
   };
 
@@ -89,7 +89,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   // ---------- CORS (auth is header-based, no cookies) ----------
   app.use('/api/mini', (req, res, next) => {
     res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Headers', 'Content-Type, X-Init-Data');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, X-Init-Data, X-Lang');
     res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
@@ -128,24 +128,26 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   async function auth(req, res, next) {
     try {
       const v = verifyInitData(req.get('X-Init-Data'));
-      if (!v) return res.status(401).json({ ok: false, code: 'AUTH', error: 'Mini App ko Telegram ke andar se open karo.' });
+      if (!v) return res.status(401).json({ ok: false, code: 'AUTH', error: 'Open inside Telegram' });
 
       const uid = String(v.user.id);
       req.tg = { id: uid, user: v.user, startParam: v.startParam };
+      const lh = String(req.get('X-Lang') || 'en');
+      req.lang = ['en', 'hi', 'hg'].includes(lh) ? lh : 'en';
 
       const sp = v.startParam || '';
       const refCode = sp.startsWith('REF') ? sp : null;
       await fb.createUserIfNotExists(uid, v.user, refCode);
 
       if (await fb.isUserBanned(uid)) {
-        return res.status(403).json({ ok: false, code: 'BANNED', error: 'Aapko block kar diya gaya hai. Support se contact karo.' });
+        return res.status(403).json({ ok: false, code: 'BANNED', error: 'Blocked' });
       }
 
       const settings = await fb.getBotSettings();
       const isAdmin = fb.isAdmin(uid);
       req.isAdmin = isAdmin;
       if (settings.maintenanceMode && !isAdmin) {
-        return res.status(503).json({ ok: false, code: 'MAINTENANCE', error: settings.maintenanceMessage || 'Maintenance chal rahi hai.' });
+        return res.status(503).json({ ok: false, code: 'MAINTENANCE', error: 'Maintenance', message: settings.maintenanceMessage || '' });
       }
 
       const required = (settings.channels || []).filter(c => c.required && c.username);
@@ -153,13 +155,13 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
         const missing = [];
         for (const ch of required) if (!(await isMember(uid, ch.username))) missing.push({ username: ch.username, label: ch.label || ch.username });
         if (missing.length) {
-          return res.status(403).json({ ok: false, code: 'JOIN_REQUIRED', error: 'Pehle required channels join karo.', channels: missing });
+          return res.status(403).json({ ok: false, code: 'JOIN_REQUIRED', error: 'Join required channels', channels: missing });
         }
       }
       next();
     } catch (err) {
       console.error('MiniApp auth error:', err);
-      res.status(500).json({ ok: false, error: 'Server error' });
+      res.status(500).json({ ok: false, code: 'SERVER', error: 'Server error' });
     }
   }
   app.use('/api/mini', (req, res, next) => (req.path.startsWith('/img/') ? next() : auth(req, res, next)));
@@ -210,14 +212,29 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   }
 
   // ---------- delivery (via the bot chat) ----------
-  async function deliver(userId, product, orderId) {
+  const DM = {
+    caption: { en: (n) => `📦 ${n}\n\nThank you for your purchase! 🙏`, hi: (n) => `📦 ${n}\n\nखरीदारी के लिए धन्यवाद! 🙏`, hg: (n) => `📦 ${n}\n\nThank you for your purchase! 🙏` },
+    link: {
+      en: (n, l) => `📦 ${n}\n\n🔗 Download link:\n${l}\n\nThank you for your purchase! 🙏`,
+      hi: (n, l) => `📦 ${n}\n\n🔗 डाउनलोड लिंक:\n${l}\n\nखरीदारी के लिए धन्यवाद! 🙏`,
+      hg: (n, l) => `📦 ${n}\n\n🔗 Download Link:\n${l}\n\nThank you for your purchase! 🙏`
+    },
+    none: {
+      en: "⚠️ Delivery content isn't set. Please contact support, it will be fixed soon.",
+      hi: '⚠️ डिलीवरी कंटेंट सेट नहीं है। सपोर्ट से संपर्क करें, जल्द ठीक कर दिया जाएगा।',
+      hg: '⚠️ Delivery content set nahi hai. Support se contact karo, jald hi resolve hoga.'
+    }
+  };
+
+  async function deliver(userId, product, orderId, lang) {
+    const L = ['en', 'hi', 'hg'].includes(lang) ? lang : 'en';
     try {
       if (product.deliveryType === 'file' && product.fileId) {
-        await bot.telegram.sendDocument(userId, product.fileId, { caption: `📦 ${product.name}\n\nThank you for your purchase! 🙏` });
+        await bot.telegram.sendDocument(userId, product.fileId, { caption: DM.caption[L](product.name) });
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
-        await bot.telegram.sendMessage(userId, `📦 ${product.name}\n\n🔗 Download Link:\n${product.deliveryLink}\n\nThank you for your purchase! 🙏`);
+        await bot.telegram.sendMessage(userId, DM.link[L](product.name, product.deliveryLink));
       } else {
-        await bot.telegram.sendMessage(userId, '⚠️ Delivery content set nahi hai. Support se contact karo, jald hi resolve hoga.');
+        await bot.telegram.sendMessage(userId, DM.none[L]);
         return { delivered: false, reason: 'no_content' };
       }
       if (orderId) await fb.updateOrderStatus(orderId, 'delivered', { deliveredAt: Date.now() });
@@ -291,7 +308,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   app.get('/api/mini/product/:id', wrap(async (req, res) => {
     const uid = req.tg.id;
     const p = await fb.getProduct(req.params.id);
-    if (!p || !p.active) return res.status(404).json({ ok: false, error: 'Product available nahi hai.' });
+    if (!p || !p.active) return res.status(404).json({ ok: false, code: 'NOT_AVAILABLE', error: 'Product not available' });
     fb.incrementProductViews(req.params.id).catch(() => {});
 
     const reviewsObj = await fb.getProductReviews(req.params.id);
@@ -316,10 +333,15 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   app.post('/api/mini/coupon', wrap(async (req, res) => {
     const { code, productId } = req.body || {};
     const p = await fb.getProduct(productId);
-    if (!p || !p.active) return res.json({ ok: false, error: 'Product nahi mila.' });
-    if (!code) return res.json({ ok: false, error: 'Coupon code daalo.' });
+    if (!p || !p.active) return res.json({ ok: false, code: 'NOT_AVAILABLE', error: 'Product not available' });
+    if (!code) return res.json({ ok: false, code: 'NO_CODE', error: 'Enter a coupon code' });
     const c = await fb.validateCoupon(String(code).trim(), p.price);
-    if (!c.valid) return res.json({ ok: false, error: c.reason || 'Invalid coupon' });
+    if (!c.valid) {
+      const r = String(c.reason || '');
+      const ccode = r.startsWith('Coupon expired') ? 'COUPON_EXPIRED' : r.includes('usage limit') ? 'COUPON_LIMIT' : r.startsWith('Minimum order') ? 'COUPON_MIN' : 'COUPON_INVALID';
+      const m = r.match(/(\d+)/);
+      return res.json({ ok: false, code: ccode, min: m ? parseInt(m[1], 10) : undefined, error: r || 'Invalid coupon' });
+    }
     res.json({ ok: true, code: String(code).trim().toUpperCase(), discount: c.discount, final: Math.max(0, p.price - c.discount) });
   }));
 
@@ -329,18 +351,18 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const uid = req.tg.id;
     const { productId, method, coupon } = req.body || {};
     const lockKey = `${uid}:${productId}`;
-    if (inflight.has(lockKey)) return res.json({ ok: false, error: 'Request process ho rahi hai, ruko...' });
+    if (inflight.has(lockKey)) return res.json({ ok: false, code: 'IN_PROGRESS', error: 'Request in progress' });
     inflight.add(lockKey);
 
     try {
       const product = await fb.getProduct(productId);
-      if (!product || !product.active) return res.json({ ok: false, error: 'Yeh product available nahi hai.' });
+      if (!product || !product.active) return res.json({ ok: false, code: 'NOT_AVAILABLE', error: 'Product not available' });
 
       if (await fb.hasUserBoughtProduct(uid, productId)) {
         return res.json({ ok: true, status: 'owned' });
       }
       if (product.stock !== undefined && product.stock !== -1 && product.stock <= 0) {
-        return res.json({ ok: false, error: 'Yeh product abhi out of stock hai.' });
+        return res.json({ ok: false, code: 'OUT_OF_STOCK', error: 'Out of stock' });
       }
 
       const isFree = product.price === 0;
@@ -354,9 +376,9 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
 
         if (paymentMethod === 'wallet') {
           const bal = await fb.getWalletBalance(uid);
-          if (bal < final) return res.json({ ok: false, code: 'LOW_BALANCE', error: `Wallet balance kam hai (₹${bal}). ₹${final} chahiye.`, balance: bal, need: final });
+          if (bal < final) return res.json({ ok: false, code: 'LOW_BALANCE', error: 'Low wallet balance', balance: bal, need: final });
           try { await fb.debitWallet(uid, final, 'purchase'); }
-          catch (e) { return res.json({ ok: false, code: 'LOW_BALANCE', error: 'Wallet balance kam hai.' }); }
+          catch (e) { return res.json({ ok: false, code: 'LOW_BALANCE', error: 'Low wallet balance', balance: await fb.getWalletBalance(uid), need: final }); }
         }
 
         const order = await fb.createOrder({
@@ -376,7 +398,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
         await fb.decrementStock(productId);
         if (hooks.checkAndAlertLowStock) hooks.checkAndAlertLowStock(productId).catch(() => {});
 
-        const d = await deliver(uid, product, order.id);
+        const d = await deliver(uid, product, order.id, req.lang);
         return res.json({
           ok: true,
           status: 'done',
@@ -405,7 +427,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       if (!qr.success) {
         await fb.updateOrderStatus(order.id, 'failed');
         console.error('MiniApp ZapUPI order failed:', qr.error);
-        return res.json({ ok: false, error: 'Payment link nahi ban paya. Thodi der baad try karo.' });
+        return res.json({ ok: false, code: 'PAY_LINK', error: 'Payment link failed' });
       }
       await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
       return res.json({ ok: true, status: 'pending', orderId: order.id, paymentUrl: qr.paymentUrl, amount: final });
@@ -418,7 +440,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   app.post('/api/mini/topup', wrap(async (req, res) => {
     const uid = req.tg.id;
     const amount = parseInt(req.body && req.body.amount, 10);
-    if (isNaN(amount) || amount < 10 || amount > 50000) return res.json({ ok: false, error: 'Amount ₹10 se ₹50,000 ke beech hona chahiye.' });
+    if (isNaN(amount) || amount < 10 || amount > 50000) return res.json({ ok: false, code: 'TOPUP_RANGE', error: 'Amount out of range' });
 
     const paymentSettings = await fb.getPaymentSettings();
     const order = await fb.createOrder({
@@ -428,7 +450,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const qr = await fampay.generateQr(paymentSettings.upiId, amount, paymentSettings);
     if (!qr.success) {
       await fb.updateOrderStatus(order.id, 'failed');
-      return res.json({ ok: false, error: 'Payment link nahi ban paya. Try again.' });
+      return res.json({ ok: false, code: 'PAY_LINK', error: 'Payment link failed' });
     }
     await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
     res.json({ ok: true, orderId: order.id, paymentUrl: qr.paymentUrl, amount });
@@ -438,7 +460,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   app.post('/api/mini/pro', wrap(async (req, res) => {
     const uid = req.tg.id;
     const settings = await fb.getProPlanSettings();
-    if (settings.active === false) return res.json({ ok: false, error: 'Pro Plan abhi available nahi hai.' });
+    if (settings.active === false) return res.json({ ok: false, code: 'PRO_OFF', error: 'Pro plan off' });
 
     const paymentSettings = await fb.getPaymentSettings();
     const order = await fb.createOrder({
@@ -448,7 +470,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const qr = await fampay.generateQr(paymentSettings.upiId, settings.price, paymentSettings);
     if (!qr.success) {
       await fb.updateOrderStatus(order.id, 'failed');
-      return res.json({ ok: false, error: 'Payment link nahi ban paya. Try again.' });
+      return res.json({ ok: false, code: 'PAY_LINK', error: 'Payment link failed' });
     }
     await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
     res.json({ ok: true, orderId: order.id, paymentUrl: qr.paymentUrl, amount: settings.price });
@@ -457,7 +479,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   // ---- order status (the app polls this after the user pays) ----
   app.get('/api/mini/order/:id', wrap(async (req, res) => {
     let order = await fb.getOrder(req.params.id);
-    if (!order || String(order.userId) !== req.tg.id) return res.status(404).json({ ok: false, error: 'Order nahi mila.' });
+    if (!order || String(order.userId) !== req.tg.id) return res.status(404).json({ ok: false, code: 'ORDER_NOT_FOUND', error: 'Order not found' });
 
     if (order.status === 'pending' && hooks.checkAndProcessOrder) {
       try { await hooks.checkAndProcessOrder(order.id); } catch (e) { console.error('MiniApp status check error:', e.message); }
@@ -475,7 +497,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
 
   app.post('/api/mini/order/:id/cancel', wrap(async (req, res) => {
     const order = await fb.getOrder(req.params.id);
-    if (!order || String(order.userId) !== req.tg.id) return res.status(404).json({ ok: false, error: 'Order nahi mila.' });
+    if (!order || String(order.userId) !== req.tg.id) return res.status(404).json({ ok: false, code: 'ORDER_NOT_FOUND', error: 'Order not found' });
     if (order.status === 'pending') await fb.updateOrderStatus(order.id, 'failed', { cancelledByUser: true });
     res.json({ ok: true });
   }));
@@ -506,14 +528,14 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
 
   app.post('/api/mini/redeliver', wrap(async (req, res) => {
     const order = await fb.getOrder((req.body || {}).orderId);
-    if (!order || String(order.userId) !== req.tg.id) return res.json({ ok: false, error: 'Order nahi mila.' });
+    if (!order || String(order.userId) !== req.tg.id) return res.json({ ok: false, code: 'ORDER_NOT_FOUND', error: 'Order not found' });
     if (!(order.status === 'paid' || order.status === 'delivered') || order.isWalletTopup || order.isProPlan) {
-      return res.json({ ok: false, error: 'Yeh order download ke liye available nahi hai.' });
+      return res.json({ ok: false, code: 'NOT_DOWNLOADABLE', error: 'Not downloadable' });
     }
     const live = await fb.getProduct(order.productId);
     const p = live || { name: order.productName, ...(order.productSnapshot || {}) };
-    const d = await deliver(req.tg.id, p, null);
-    if (!d.delivered) return res.json({ ok: false, error: 'Bot chat mein bhej nahi paye. Pehle bot mein /start dabao, phir try karo.' });
+    const d = await deliver(req.tg.id, p, null, req.lang);
+    if (!d.delivered) return res.json({ ok: false, code: 'SEND_FAILED', error: 'Could not send' });
     res.json({ ok: true });
   }));
 
@@ -545,10 +567,10 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const { productId } = req.body || {};
     const rating = parseInt((req.body || {}).rating, 10);
     const comment = String((req.body || {}).comment || '').slice(0, 300);
-    if (!(rating >= 1 && rating <= 5)) return res.json({ ok: false, error: 'Rating 1 se 5 ke beech do.' });
-    if (!(await fb.hasUserBoughtProduct(uid, productId))) return res.json({ ok: false, error: 'Review sirf khareedne ke baad de sakte ho.' });
+    if (!(rating >= 1 && rating <= 5)) return res.json({ ok: false, code: 'BAD_RATING', error: 'Bad rating' });
+    if (!(await fb.hasUserBoughtProduct(uid, productId))) return res.json({ ok: false, code: 'NOT_BOUGHT', error: 'Not bought' });
     const existing = Object.values(await fb.getProductReviews(productId)).some(r => String(r.userId) === uid);
-    if (existing) return res.json({ ok: false, error: 'Aap pehle hi review de chuke ho.' });
+    if (existing) return res.json({ ok: false, code: 'ALREADY_REVIEWED', error: 'Already reviewed' });
     await fb.addReview(productId, uid, req.tg.user.first_name || 'User', rating, comment);
     res.json({ ok: true });
   }));
@@ -558,11 +580,11 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const { orderId } = req.body || {};
     const reason = String((req.body || {}).reason || '').slice(0, 300);
     const order = await fb.getOrder(orderId);
-    if (!order || String(order.userId) !== req.tg.id) return res.json({ ok: false, error: 'Order nahi mila.' });
+    if (!order || String(order.userId) !== req.tg.id) return res.json({ ok: false, code: 'ORDER_NOT_FOUND', error: 'Order not found' });
     if (!(order.status === 'paid' || order.status === 'delivered') || !(order.amount > 0) || order.isWalletTopup || order.isProPlan) {
-      return res.json({ ok: false, error: 'Is order ka refund request nahi ho sakta.' });
+      return res.json({ ok: false, code: 'REFUND_NOT_ALLOWED', error: 'Refund not allowed' });
     }
-    if (order.refundStatus) return res.json({ ok: false, error: 'Refund request pehle hi ho chuki hai.' });
+    if (order.refundStatus) return res.json({ ok: false, code: 'REFUND_EXISTS', error: 'Refund exists' });
     await fb.requestRefund(orderId, reason);
     for (const a of adminIds()) {
       try { await bot.telegram.sendMessage(a, `💸 Refund Request (Mini App)\n\nOrder: ${orderId}\nProduct: ${order.productName}\nAmount: ₹${order.amount}\nUser: ${req.tg.id}\nReason: ${reason || '-'}`); } catch (e) {}
