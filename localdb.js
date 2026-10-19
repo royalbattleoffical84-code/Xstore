@@ -32,6 +32,7 @@ const FILES = {
   dmQueue: 'dmQueue.json',
   staff: 'staff.json',
   staffRequests: 'staffRequests.json',
+  staffSettings: 'staffSettings.json',
   paymentSettings: 'paymentSettings.json'
 };
 
@@ -491,7 +492,7 @@ async function processRefund(orderId, approve) {
 async function getSalesReport(periodDays) {
   const cutoff = Date.now() - (periodDays * 24 * 60 * 60 * 1000);
   const orders = readCollection('orders');
-  const list = Object.values(orders).filter(o => o.createdAt >= cutoff && (o.status === 'paid' || o.status === 'delivered'));
+  const list = Object.values(orders).filter(o => o.createdAt >= cutoff && (o.status === 'paid' || o.status === 'delivered') && o.paymentMethod !== 'gift');
 
   const totalSales = list.reduce((sum, o) => sum + (o.amount || 0), 0);
   const productCounts = {};
@@ -615,7 +616,7 @@ async function getBotSettings() {
   const s = readCollection('botSettings');
   if (Object.keys(s).length) return s;
   return {
-    welcomeMessage: '✨ *Welcome, {name}!* ✨\n\n💎 Quality you can count on, delivery you can rely on.\n\n🛍 *Curated Products* — paid & free\n💳 *Secure Payments* via UPI\n⚡ *Instant Delivery* after payment\n🛡 *Dedicated Support*, whenever you need it\n\n👇 Select an option below to begin',
+    welcomeMessage: require('./ui').welcomeTemplate(),
     channels: [],
     supportTelegram: '',
     supportWhatsapp: '',
@@ -632,7 +633,7 @@ async function updateBotSettings(updates) {
   return updateCollectionAtomic('botSettings', (current) => {
     const hasData = Object.keys(current).length > 0;
     const base = hasData ? current : {
-      welcomeMessage: '✨ *Welcome, {name}!* ✨\n\n💎 Quality you can count on, delivery you can rely on.\n\n🛍 *Curated Products* — paid & free\n💳 *Secure Payments* via UPI\n⚡ *Instant Delivery* after payment\n🛡 *Dedicated Support*, whenever you need it\n\n👇 Select an option below to begin',
+      welcomeMessage: require('./ui').welcomeTemplate(),
       channels: [], supportTelegram: '', supportWhatsapp: '', botName: '', botDescription: '',
       maintenanceMode: false, maintenanceMessage: '🛠 Bot abhi maintenance mein hai. Thodi der baad try karo.',
       menuCustomButtons: [], menuLabels: {}
@@ -864,6 +865,33 @@ async function addStaff(telegramId, permissions, meta) {
   });
 }
 
+// ---- Staff settings (everything the owner can tune about the staff system) ----
+const STAFF_SETTINGS_DEFAULTS = {
+  applyEnabled: true,          // is "Become a Staff" open?
+  applyFee: 0,                 // ₹ charged when a user applies (0 = free)
+  refundOnReject: true,        // refund the fee to wallet if the owner rejects
+  defaultPerms: ['products'],  // permissions given to approved applicants
+  giftEnabled: true,           // can staff gift their own products?
+  giftDailyLimit: 10,          // gifts per staff per 24h (0 = unlimited)
+  maxProducts: 0               // products a staff may submit (0 = unlimited)
+};
+
+async function getStaffSettings() {
+  const s = readCollection('staffSettings');
+  return { ...STAFF_SETTINGS_DEFAULTS, ...s };
+}
+
+async function updateStaffSettings(patch) {
+  await updateCollectionAtomic('staffSettings', (s) => { Object.assign(s, patch); });
+  return getStaffSettings();
+}
+
+async function setStaffPermissions(telegramId, permissions) {
+  await updateCollectionAtomic('staff', (staff) => {
+    if (staff[String(telegramId)]) staff[String(telegramId)].permissions = permissions;
+  });
+}
+
 async function getStaff(telegramId) {
   const staff = readCollection('staff');
   return staff[String(telegramId)] || null;
@@ -998,6 +1026,9 @@ module.exports = {
   getAllStaff,
   addStaff,
   getStaff,
+  getStaffSettings,
+  updateStaffSettings,
+  setStaffPermissions,
   createStaffRequest,
   getStaffRequest,
   getPendingStaffRequests,

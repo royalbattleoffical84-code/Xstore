@@ -5,6 +5,7 @@ const fb = require('./localdb');
 const fampay = require('./fampay');
 const { setupAdminPanel } = require('./adminPanel');
 const { setupStaffApply } = require('./staffApply');
+const ui = require('./ui');
 const { setupMiniApp } = require('./miniapp-api');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -241,7 +242,7 @@ bot.action('check_joined', async (ctx) => {
 
 // "Become a Staff" application flow (registered after the middlewares above so
 // banned / not-joined users can't use it)
-const staffApply = setupStaffApply(bot, fb, userState, { mdEscape, sendMainMenu, sendMainMenuToUser });
+const staffApply = setupStaffApply(bot, fb, userState, { mdEscape, sendMainMenu, sendMainMenuToUser, fampay, sendZapUpiPaymentLink });
 
 // ============ START / REGISTER ============
 
@@ -315,6 +316,7 @@ const DEFAULT_MENU_LABELS = {
   checkin: '🎯 Daily Check-in',
   leaderboard: '🏆 Leaderboard',
   becomestaff: '🧑‍💼 Become a Staff',
+  adminpanel: '🛠 Admin Panel',
   staffpanel: '🛠 Staff Panel'
 };
 
@@ -334,7 +336,9 @@ function mainMenu(settings, flags = {}) {
 
   // Staff: panel button right in the menu (no /command). Everyone else
   // (except owners) can apply to become staff.
-  if (flags.isStaff) {
+  if (flags.isOwner) {
+    rows.push([Markup.button.callback(labels.adminpanel, 'menu_adminpanel')]); // only ADMIN_TELEGRAM_IDS owners
+  } else if (flags.isStaff) {
     rows.push([Markup.button.callback(labels.staffpanel, 'menu_staffpanel')]);
   } else if (!flags.isOwner) {
     rows.push([Markup.button.callback(flags.pendingStaff ? '⏳ Staff Request Pending' : labels.becomestaff, 'menu_becomestaff')]);
@@ -1380,15 +1384,13 @@ async function deliverProduct(ctx, product, orderId, silent) {
   try {
     if (product.deliveryType === 'file' && product.fileId) {
       await ctx.replyWithDocument(product.fileId, {
-        caption: `📦 ${product.name}\n\nThank you for your purchase! 🙏`
+        caption: ui.deliveredPlain(product.name)
       });
     } else if (product.deliveryType === 'link' && product.deliveryLink) {
       // Sent as plain text (no Markdown parsing) — links often contain
       // underscores, asterisks, etc. which Telegram Markdown would otherwise
       // interpret as formatting and corrupt or hide the link entirely.
-      await ctx.reply(
-        `📦 ${product.name}\n\n🔗 Download Link:\n${product.deliveryLink}\n\nThank you for your purchase! 🙏`
-      );
+      await ctx.reply(ui.deliveredPlain(product.name, product.deliveryLink));
     } else {
       await ctx.reply('⚠️ Delivery content set nahi hai. Support se contact karo, jald hi resolve hoga.');
     }
@@ -1792,6 +1794,13 @@ async function _checkAndProcessOrder(orderId) {
     return { processed: true, reason: 'topup_done' };
   }
 
+  // Staff application fee -> now the application can go to the owner
+  if (order.productId === 'STAFF_FEE' || order.isStaffFee) {
+    await fb.updateOrderStatus(orderId, 'delivered', { deliveredAt: Date.now() });
+    await staffApply.completeAfterPayment(order);
+    return { processed: true, reason: 'stafffee_done' };
+  }
+
   // Pro Plan subscription
   if (order.productId === 'PRO_PLAN' || order.isProPlan) {
     const duration = order.proPlanDuration || 30;
@@ -1816,16 +1825,12 @@ async function _checkAndProcessOrder(orderId) {
     try {
       if (product.deliveryType === 'file' && product.fileId) {
         await bot.telegram.sendDocument(order.userId, product.fileId, {
-          caption: `📦 *${product.name}*\n\n🙏 Thank you for your purchase!`,
-          parse_mode: 'Markdown'
+          caption: ui.deliveredPlain(product.name)
         });
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
         // Plain text (no Markdown) — links often contain underscores/asterisks
         // which Markdown parsing would otherwise corrupt or hide.
-        await bot.telegram.sendMessage(
-          order.userId,
-          `✅ Payment successful!\n\n📦 ${product.name}\n\n🔗 Download Link:\n${product.deliveryLink}\n\n🙏 Thank you!`
-        );
+        await bot.telegram.sendMessage(order.userId, ui.deliveredPlain(product.name, product.deliveryLink));
       }
       await fb.updateOrderStatus(orderId, 'delivered', { deliveredAt: Date.now() });
     } catch (deliveryErr) {
@@ -2093,7 +2098,7 @@ async function processNewProductNotifications() {
       try {
         await bot.telegram.sendMessage(
           uid,
-          `🆕 *New Product Added!*\n\n✨ ${mdEscape(product.name)}\n💰 ${priceLabel}\n\n${mdEscape(product.description || '')}`,
+          ui.newProduct(product),
           { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '👀 View Product', callback_data: `viewproduct_${id}` }]] } }
         );
       } catch (e) {}

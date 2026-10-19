@@ -212,13 +212,8 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   }
 
   // ---------- delivery (via the bot chat) ----------
+  const ui = require('./ui');
   const DM = {
-    caption: { en: (n) => `📦 ${n}\n\nThank you for your purchase! 🙏`, hi: (n) => `📦 ${n}\n\nखरीदारी के लिए धन्यवाद! 🙏`, hg: (n) => `📦 ${n}\n\nThank you for your purchase! 🙏` },
-    link: {
-      en: (n, l) => `📦 ${n}\n\n🔗 Download link:\n${l}\n\nThank you for your purchase! 🙏`,
-      hi: (n, l) => `📦 ${n}\n\n🔗 डाउनलोड लिंक:\n${l}\n\nखरीदारी के लिए धन्यवाद! 🙏`,
-      hg: (n, l) => `📦 ${n}\n\n🔗 Download Link:\n${l}\n\nThank you for your purchase! 🙏`
-    },
     none: {
       en: "⚠️ Delivery content isn't set. Please contact support, it will be fixed soon.",
       hi: '⚠️ डिलीवरी कंटेंट सेट नहीं है। सपोर्ट से संपर्क करें, जल्द ठीक कर दिया जाएगा।',
@@ -230,9 +225,9 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const L = ['en', 'hi', 'hg'].includes(lang) ? lang : 'en';
     try {
       if (product.deliveryType === 'file' && product.fileId) {
-        await bot.telegram.sendDocument(userId, product.fileId, { caption: DM.caption[L](product.name) });
+        await bot.telegram.sendDocument(userId, product.fileId, { caption: ui.deliveredPlain(product.name, null, L) });
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
-        await bot.telegram.sendMessage(userId, DM.link[L](product.name, product.deliveryLink));
+        await bot.telegram.sendMessage(userId, ui.deliveredPlain(product.name, product.deliveryLink, L));
       } else {
         await bot.telegram.sendMessage(userId, DM.none[L]);
         return { delivered: false, reason: 'no_content' };
