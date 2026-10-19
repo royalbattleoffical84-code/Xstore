@@ -159,7 +159,38 @@ function giftSent({ name, to, by }) {
   return [banner('🎁 GIFT SENT', '✦ DELIVERED ✦'), '', `🛍 ${md(clip(name, 100))}`, `👤 To: \`${to}\``, by ? `🧑‍💼 By: ${md(by)}` : null, '', ribbon('✅ DONE'), foot('User ko product mil gaya')].filter(x => x !== null).join('\n');
 }
 
+function featureRequestCard(req, feeInfo) {
+  const qa = (req.answers || []).map((x, i) => `*Q${i + 1}.* ${md(x.q)}\n➜ ${md(x.a)}`).join('\n\n');
+  return [
+    banner('🧩 NEW APPLICATION', `✦ ${req.featureTitle} ✦`.slice(0, 40)),
+    '',
+    `👤 ${md(req.tgName || 'User')}${req.username ? ' (@' + md(req.username) + ')' : ''}`,
+    `🆔 \`${req.userId}\``,
+    req.phone ? `📱 \`${req.phone}\`` : null,
+    feeInfo ? `💰 ${feeInfo}` : null,
+    '',
+    qa || '_(koi sawal nahi)_',
+    '',
+    BAR,
+    ribbon('👇 DECISION'),
+    foot('Approve ya Reject karo')
+  ].filter(x => x !== null).join('\n');
+}
+
+function featureApproved(title, rewardLine, customMsg) {
+  return [
+    banner('✅ APPROVED', `✦ ${title} ✦`.slice(0, 40)),
+    '',
+    customMsg ? md(customMsg) : 'Aapki request approve ho gayi! 🎉',
+    rewardLine ? `\n${rewardLine}` : null,
+    '',
+    ribbon('🚀 ENJOY'),
+    foot('Home menu se aage badho')
+  ].filter(x => x !== null).join('\n');
+}
+
 module.exports = {
+  featureRequestCard, featureApproved,
   STORE_NAME, md, banner, ribbon, foot, boxed, BAR, clip,
   welcomeTemplate, newProduct, deliveredPlain, giftPlain,
   staffWelcome, productApproved, productRejected, staffRequestCard, productSubmission, giftSent

@@ -5,6 +5,7 @@ const fb = require('./localdb');
 const fampay = require('./fampay');
 const { setupAdminPanel } = require('./adminPanel');
 const { setupStaffApply } = require('./staffApply');
+const { setupFeatures } = require('./features');
 const ui = require('./ui');
 const { setupMiniApp } = require('./miniapp-api');
 
@@ -243,6 +244,7 @@ bot.action('check_joined', async (ctx) => {
 // "Become a Staff" application flow (registered after the middlewares above so
 // banned / not-joined users can't use it)
 const staffApply = setupStaffApply(bot, fb, userState, { mdEscape, sendMainMenu, sendMainMenuToUser, fampay, sendZapUpiPaymentLink });
+const features = setupFeatures(bot, fb, userState, adminPanel.adminState, { mdEscape, sendMainMenu, sendMainMenuToUser, fampay, sendZapUpiPaymentLink });
 
 // ============ START / REGISTER ============
 
@@ -278,7 +280,9 @@ async function getMenuFlags(userId) {
     const last = await fb.getLatestStaffRequestForUser(userId);
     pendingStaff = !!(last && last.status === 'pending');
   }
-  return { isOwner, isStaff, pendingStaff };
+  // Owner-built custom features (Admin Panel -> Features) show as menu buttons
+  const features = isOwner ? [] : (await fb.getEnabledFeatures()).slice(0, 8).map(f => ({ id: f.id, title: f.title }));
+  return { isOwner, isStaff, pendingStaff, features };
 }
 
 async function sendMainMenu(ctx) {
@@ -343,6 +347,8 @@ function mainMenu(settings, flags = {}) {
   } else if (!flags.isOwner) {
     rows.push([Markup.button.callback(flags.pendingStaff ? '⏳ Staff Request Pending' : labels.becomestaff, 'menu_becomestaff')]);
   }
+
+  (flags.features || []).forEach(f => rows.push([Markup.button.callback(f.title, `feat_${f.id}`)]));
 
   // Admin-configured custom link buttons on the main menu (e.g. "Join Community").
   // Supports multiple — each one is its own row.
@@ -912,12 +918,13 @@ async function sendProductCard(ctx, id, p) {
   const viewsLine = p.views ? `\n👁 ${p.views} views` : '';
   const priceLabel = p.price === 0 ? '*FREE* 🎁' : `*₹${p.price}*`;
 
-  const caption = `✨ *${mdEscape(p.name)}*\n\n${mdEscape(p.description) || ''}\n\n💰 Price: ${priceLabel}${ratingLine}${stockLine}${viewsLine}`;
+  const lockLine = (p.price === 0 && p.referToUnlock > 0) ? `\n🔒 *Refer ${p.referToUnlock} friend${p.referToUnlock > 1 ? 's' : ''} to unlock*` : '';
+  const caption = `✨ *${mdEscape(p.name)}*\n\n${mdEscape(p.description) || ''}\n\n💰 Price: ${priceLabel}${lockLine}${ratingLine}${stockLine}${viewsLine}`;
 
   const isFree = p.price === 0;
   const rows = [
     [isFree
-      ? Markup.button.callback('📥 Download Free', `freedownload_${id}`)
+      ? Markup.button.callback(p.referToUnlock > 0 ? `🔒 Refer ${p.referToUnlock} to Unlock` : '📥 Download Free', `freedownload_${id}`)
       : Markup.button.callback('🛒 Buy Now', `buy_${id}`)],
     [Markup.button.callback('⭐ Reviews', `reviews_${id}`)]
   ];
@@ -1101,6 +1108,42 @@ bot.action(/^freedownload_(.+)$/, async (ctx) => {
     return ctx.answerCbQuery('Yeh product abhi out of stock hai.');
   }
 
+  // Refer-to-unlock: referrals are spent like tokens. VIP + owners skip the lock.
+  const need = product.referToUnlock || 0;
+  let spendReferralsN = 0;
+  if (need > 0 && !fb.isAdmin(telegramId) && !(await fb.isUserVip(telegramId))) {
+    const rb = await fb.getReferralBalance(telegramId);
+    if (rb.available < need) {
+      await ctx.answerCbQuery();
+      const user = await fb.getUser(String(telegramId));
+      const me = ctx.botInfo || await bot.telegram.getMe();
+      const link = `https://t.me/${me.username}?start=${user.referralCode}`;
+      const filled = Math.min(need, rb.available);
+      const bar = '▰'.repeat(filled) + '▱'.repeat(need - filled);
+      const text = [
+        ui.banner('🔒 LOCKED PRODUCT', '✦ REFER TO UNLOCK ✦'),
+        '',
+        `✨ *${mdEscape(product.name)}*`,
+        '',
+        `👥 Referrals needed: *${need}*`,
+        `📊 Your available referrals: *${rb.available}*`,
+        `${bar}  ${filled}/${need}`,
+        '',
+        '❖ Apna referral link dosto ko bhejo',
+        '❖ Jab dost bot join kare, count badhega',
+        '',
+        ui.BAR,
+        ui.ribbon('🔗 YOUR LINK'),
+        ui.foot(`\`${link}\``)
+      ].join('\n');
+      return smartReply(ctx, text, navButtons([
+        [Markup.button.url('📤 Share Referral Link', `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent('Yahan se free digital products lo 🎁')}`)],
+        [Markup.button.callback('🔄 Check Again', `freedownload_${productId}`)]
+      ], telegramId));
+    }
+    spendReferralsN = need;
+  }
+
   await ctx.answerCbQuery();
 
   const order = await fb.createOrder({
@@ -1117,6 +1160,7 @@ bot.action(/^freedownload_(.+)$/, async (ctx) => {
     }
   });
   await fb.updateOrderStatus(order.id, 'paid');
+  if (spendReferralsN > 0) await fb.spendReferrals(telegramId, spendReferralsN);
   await fb.decrementStock(productId);
   await checkAndAlertLowStock(productId);
   await deliverProduct(ctx, product, order.id);
@@ -1173,7 +1217,7 @@ bot.action(/^paywallet_(.+?)(?:~(.+))?$/, async (ctx) => {
   let finalPrice = product.price;
   let couponUsed = null;
   if (couponCode) {
-    const check = await fb.validateCoupon(couponCode, product.price);
+    const check = await fb.validateCoupon(couponCode, product.price, productId);
     if (check.valid) {
       finalPrice = Math.max(0, product.price - check.discount);
       couponUsed = couponCode;
@@ -1240,7 +1284,7 @@ bot.action(/^payzabupi_(.+?)(?:~(.+))?$/, async (ctx) => {
   let finalPrice = product.price;
   let couponUsed = null;
   if (couponCode) {
-    const check = await fb.validateCoupon(couponCode, product.price);
+    const check = await fb.validateCoupon(couponCode, product.price, productId);
     if (check.valid) {
       finalPrice = Math.max(0, product.price - check.discount);
       couponUsed = couponCode;
@@ -1273,7 +1317,7 @@ bot.action(/^agreepay_(.+?)(?:~(.+))?$/, async (ctx) => {
   let finalPrice = product.price;
   let couponUsed = null;
   if (couponCode) {
-    const check = await fb.validateCoupon(couponCode, product.price);
+    const check = await fb.validateCoupon(couponCode, product.price, productId);
     if (check.valid) {
       finalPrice = Math.max(0, product.price - check.discount);
       couponUsed = couponCode;
@@ -1536,6 +1580,9 @@ bot.on('text', async (ctx) => {
   // "Become a Staff" application steps (name / note)
   if (await staffApply.handleText(ctx)) return;
 
+  // Custom features: owner's create-wizard + users' application answers
+  if (await features.handleText(ctx)) return;
+
   const state = userState[ctx.from.id];
   if (!state) return; // ignore, no active flow
 
@@ -1585,7 +1632,7 @@ bot.on('text', async (ctx) => {
 
     if (!product) return ctx.reply('Product not found.');
 
-    const check = await fb.validateCoupon(code, product.price);
+    const check = await fb.validateCoupon(code, product.price, productId);
     if (!check.valid) {
       await ctx.reply(`❌ ${check.reason}`);
       return showOrderSummary(ctx, productId, product, null);
@@ -1792,6 +1839,13 @@ async function _checkAndProcessOrder(orderId) {
     await bot.telegram.sendMessage(order.userId, `✅ *₹${order.amount} added to your wallet!*\n\n💰 Naya balance check karne ke liye Wallet mein jao.`, { parse_mode: 'Markdown' });
     await fb.updateOrderStatus(orderId, 'delivered', { deliveredAt: Date.now() });
     return { processed: true, reason: 'topup_done' };
+  }
+
+  // Custom-feature application fee -> application can now go to the owner
+  if (order.productId === 'FEATURE_FEE' || order.isFeatureFee) {
+    await fb.updateOrderStatus(orderId, 'delivered', { deliveredAt: Date.now() });
+    await features.completeAfterPayment(order);
+    return { processed: true, reason: 'featurefee_done' };
   }
 
   // Staff application fee -> now the application can go to the owner

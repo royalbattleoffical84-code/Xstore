@@ -33,6 +33,8 @@ const FILES = {
   staff: 'staff.json',
   staffRequests: 'staffRequests.json',
   staffSettings: 'staffSettings.json',
+  features: 'features.json',
+  featureRequests: 'featureRequests.json',
   paymentSettings: 'paymentSettings.json'
 };
 
@@ -355,9 +357,20 @@ async function getCoupon(code) {
   return coupons[code.toUpperCase()] || null;
 }
 
-async function validateCoupon(code, orderAmount) {
+async function validateCoupon(code, orderAmount, productId) {
   const coupon = await getCoupon(code);
   if (!coupon || !coupon.active) return { valid: false, reason: 'Invalid or inactive coupon' };
+
+  // Staff-made coupons only work on that staff member's own products (and, if
+  // set, only on one specific product).
+  if (coupon.ownerStaffId || coupon.productId) {
+    const prod = productId ? await getProduct(productId) : null;
+    if (!prod
+      || (coupon.ownerStaffId && String(prod.submittedBy) !== String(coupon.ownerStaffId))
+      || (coupon.productId && coupon.productId !== productId)) {
+      return { valid: false, reason: 'Coupon is not valid for this product' };
+    }
+  }
 
   if (coupon.expiresAt && Date.now() > coupon.expiresAt) {
     return { valid: false, reason: 'Coupon expired' };
@@ -374,6 +387,8 @@ async function validateCoupon(code, orderAmount) {
     : coupon.discountValue;
 
   discount = Math.min(discount, orderAmount);
+  // Owner-set ceiling for staff coupons (percent of the order amount)
+  if (coupon.maxPercent) discount = Math.min(discount, Math.round((orderAmount * coupon.maxPercent) / 100));
   return { valid: true, discount, coupon };
 }
 
@@ -873,7 +888,8 @@ const STAFF_SETTINGS_DEFAULTS = {
   defaultPerms: ['products'],  // permissions given to approved applicants
   giftEnabled: true,           // can staff gift their own products?
   giftDailyLimit: 10,          // gifts per staff per 24h (0 = unlimited)
-  maxProducts: 0               // products a staff may submit (0 = unlimited)
+  maxProducts: 0,              // products a staff may submit (0 = unlimited)
+  couponMaxPercent: 50         // highest discount % a staff coupon may give
 };
 
 async function getStaffSettings() {
@@ -889,6 +905,72 @@ async function updateStaffSettings(patch) {
 async function setStaffPermissions(telegramId, permissions) {
   await updateCollectionAtomic('staff', (staff) => {
     if (staff[String(telegramId)]) staff[String(telegramId)].permissions = permissions;
+  });
+}
+
+// ---- Refer-to-unlock: referrals act like "tokens" users spend on locked free products ----
+async function getReferralBalance(telegramId) {
+  const id = String(telegramId);
+  const users = readCollection('users');
+  const total = Object.values(users).filter(u => String(u.referredBy) === id).length;
+  const spent = (users[id] && users[id].referralsSpent) || 0;
+  return { total, spent, available: Math.max(0, total - spent) };
+}
+
+async function spendReferrals(telegramId, n) {
+  const id = String(telegramId);
+  await updateCollectionAtomic('users', (users) => {
+    if (users[id]) users[id].referralsSpent = (users[id].referralsSpent || 0) + n;
+  });
+}
+
+// ---- Custom "apply for X" features the owner builds from the Admin Panel ----
+async function createFeature(data) {
+  const id = generateId('ft_');
+  const f = { id, enabled: true, createdAt: Date.now(), ...data };
+  await updateCollectionAtomic('features', (all) => { all[id] = f; });
+  return f;
+}
+async function getFeature(id) { return readCollection('features')[id] || null; }
+async function getAllFeatures() {
+  return Object.values(readCollection('features')).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+async function getEnabledFeatures() { return (await getAllFeatures()).filter(f => f.enabled); }
+async function updateFeature(id, patch) {
+  return updateCollectionAtomic('features', (all) => {
+    if (!all[id]) return { __value: null };
+    all[id] = { ...all[id], ...patch };
+    return { __value: all[id] };
+  });
+}
+async function deleteFeature(id) {
+  await updateCollectionAtomic('features', (all) => { delete all[id]; });
+}
+
+async function createFeatureRequest(data) {
+  const id = generateId('freq_');
+  const r = { id, status: 'pending', createdAt: Date.now(), ...data };
+  await updateCollectionAtomic('featureRequests', (all) => { all[id] = r; });
+  return r;
+}
+async function getFeatureRequest(id) { return readCollection('featureRequests')[id] || null; }
+async function getPendingFeatureRequests(featureId) {
+  return Object.values(readCollection('featureRequests'))
+    .filter(r => r.status === 'pending' && (!featureId || r.featureId === featureId))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+async function getLatestFeatureRequestForUser(userId, featureId) {
+  const all = Object.values(readCollection('featureRequests')).filter(r => String(r.userId) === String(userId) && r.featureId === featureId);
+  all.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return all[0] || null;
+}
+// Atomic: only the first decision on a pending request wins
+async function decideFeatureRequest(id, status, decidedBy) {
+  return updateCollectionAtomic('featureRequests', (all) => {
+    const r = all[id];
+    if (!r || r.status !== 'pending') return { __value: null };
+    all[id] = { ...r, status, decidedBy: String(decidedBy), decidedAt: Date.now() };
+    return { __value: all[id] };
   });
 }
 
@@ -1026,6 +1108,19 @@ module.exports = {
   getAllStaff,
   addStaff,
   getStaff,
+  createFeature,
+  getFeature,
+  getAllFeatures,
+  getEnabledFeatures,
+  updateFeature,
+  deleteFeature,
+  createFeatureRequest,
+  getFeatureRequest,
+  getPendingFeatureRequests,
+  getLatestFeatureRequestForUser,
+  decideFeatureRequest,
+  getReferralBalance,
+  spendReferrals,
   getStaffSettings,
   updateStaffSettings,
   setStaffPermissions,

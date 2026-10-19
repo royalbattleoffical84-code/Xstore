@@ -185,7 +185,8 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       reviewCount: count,
       customButtonText: p.customButtonText || '',
       customButtonUrl: p.customButtonUrl || '',
-      deliveryType: p.deliveryType || ''
+      deliveryType: p.deliveryType || '',
+      referToUnlock: p.price === 0 ? (p.referToUnlock || 0) : 0
     };
   }
 
@@ -249,12 +250,12 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     deliveryLink: p.deliveryLink || null
   });
 
-  async function priceWithCoupon(product, code) {
+  async function priceWithCoupon(product, code, productId) {
     let final = product.price;
     let couponUsed = null;
     let discount = 0;
     if (code) {
-      const c = await fb.validateCoupon(String(code).trim(), product.price);
+      const c = await fb.validateCoupon(String(code).trim(), product.price, productId);
       if (c.valid) { discount = c.discount; final = Math.max(0, product.price - c.discount); couponUsed = String(code).trim().toUpperCase(); }
     }
     return { final, couponUsed, discount };
@@ -314,6 +315,13 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const owned = await fb.hasUserBoughtProduct(uid, req.params.id);
     const bought = owned ? await fb.getBoughtOrder(uid, req.params.id) : null;
     const base = await publicProduct(req.params.id, p);
+    let referLock = null;
+    if (base.referToUnlock > 0 && !owned && !fb.isAdmin(uid) && !(await fb.isUserVip(uid))) {
+      const rb = await fb.getReferralBalance(uid);
+      const me = await getBotUsername();
+      const u = await fb.getUser(uid);
+      referLock = { need: base.referToUnlock, available: rb.available, link: me && u ? `https://t.me/${me}?start=${u.referralCode}` : '' };
+    }
 
     res.json({
       ok: true,
@@ -321,7 +329,8 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       reviews,
       owned,
       orderId: bought ? bought.id : null,
-      canReview: owned && !reviews.some(r => r.mine)
+      canReview: owned && !reviews.some(r => r.mine),
+      referLock
     });
   }));
 
@@ -330,10 +339,10 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
     const p = await fb.getProduct(productId);
     if (!p || !p.active) return res.json({ ok: false, code: 'NOT_AVAILABLE', error: 'Product not available' });
     if (!code) return res.json({ ok: false, code: 'NO_CODE', error: 'Enter a coupon code' });
-    const c = await fb.validateCoupon(String(code).trim(), p.price);
+    const c = await fb.validateCoupon(String(code).trim(), p.price, productId);
     if (!c.valid) {
       const r = String(c.reason || '');
-      const ccode = r.startsWith('Coupon expired') ? 'COUPON_EXPIRED' : r.includes('usage limit') ? 'COUPON_LIMIT' : r.startsWith('Minimum order') ? 'COUPON_MIN' : 'COUPON_INVALID';
+      const ccode = r.includes('not valid for this product') ? 'COUPON_SCOPE' : r.startsWith('Coupon expired') ? 'COUPON_EXPIRED' : r.includes('usage limit') ? 'COUPON_LIMIT' : r.startsWith('Minimum order') ? 'COUPON_MIN' : 'COUPON_INVALID';
       const m = r.match(/(\d+)/);
       return res.json({ ok: false, code: ccode, min: m ? parseInt(m[1], 10) : undefined, error: r || 'Invalid coupon' });
     }
@@ -362,7 +371,17 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
 
       const isFree = product.price === 0;
       const isVip = !isFree && await fb.isUserVip(uid);
-      const { final, couponUsed } = (isFree || isVip) ? { final: 0, couponUsed: null } : await priceWithCoupon(product, coupon);
+
+      // Refer-to-unlock (VIP + owners skip it)
+      let spendRef = 0;
+      if (isFree && product.referToUnlock > 0 && !fb.isAdmin(uid) && !(await fb.isUserVip(uid))) {
+        const rb = await fb.getReferralBalance(uid);
+        if (rb.available < product.referToUnlock) {
+          return res.json({ ok: false, code: 'REFER_LOCKED', error: 'Refer to unlock', need: product.referToUnlock, have: rb.available });
+        }
+        spendRef = product.referToUnlock;
+      }
+      const { final, couponUsed } = (isFree || isVip) ? { final: 0, couponUsed: null } : await priceWithCoupon(product, coupon, productId);
 
       // ---- instant paths: free / VIP / 100% coupon / wallet ----
       const instant = isFree || isVip || final === 0 || method === 'wallet';
@@ -388,6 +407,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
           productSnapshot: snapshotOf(product)
         });
         await fb.updateOrderStatus(order.id, 'paid');
+        if (spendRef > 0) await fb.spendReferrals(uid, spendRef);
         if (couponUsed) await fb.incrementCouponUsage(couponUsed);
         if (paymentMethod === 'wallet' || paymentMethod === 'coupon_free') await fb.processReferralBonus(uid, final);
         await fb.decrementStock(productId);

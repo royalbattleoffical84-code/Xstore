@@ -33,6 +33,25 @@ function setupAdminPanel(bot, fb, mdEscape) {
     return perms.includes(perm);
   }
 
+  const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+  // Staff features are LOCKED until the owner unlocks them. Owners always pass.
+  async function needPerm(ctx, perm) {
+    if (fb.isAdmin(ctx.from.id)) return true;
+    if (!(await fb.isStaff(ctx.from.id))) return false;
+    const perms = await fb.getStaffPermissions(ctx.from.id);
+    if (perms.includes(perm)) return true;
+    try { await ctx.answerCbQuery(`🔒 ${(PERM_LABELS[perm] || perm).replace(/^\S+\s/, '')} locked hai — owner se unlock karwao.`, { show_alert: true }); } catch (e) {}
+    return false;
+  }
+
+  let _botUser = null;
+  async function botUsername() {
+    if (_botUser) return _botUser;
+    try { _botUser = (await bot.telegram.getMe()).username; } catch (e) {}
+    return _botUser || '';
+  }
+
   const ownerIds = () => (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
   // ---- Product approval helpers (staff submissions need owner approval) ----
@@ -108,24 +127,42 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
   async function sendAdminMenu(ctx) {
     const owner = await isOwner(ctx);
-    const perms = owner ? null : await fb.getStaffPermissions(ctx.from.id);
-    const has = (p) => owner || perms.includes(p);
-
     const cfg = await fb.getStaffSettings();
-    const text = owner
-      ? `${ui.banner('🛠 ADMIN PANEL', '✦ OWNER CONTROL ✦')}\n\nChoose a section:`
-      : `${ui.banner('🛠 STAFF PANEL', '✦ YOUR WORKSPACE ✦')}\n\nChoose a section:`;
     const rows = [];
-    if (has('products')) rows.push([Markup.button.callback('📦 Products', 'admin_products'), Markup.button.callback('🧾 Orders', 'admin_orders')]);
-    if (owner || (has('products') && cfg.giftEnabled)) rows.push([Markup.button.callback('🎁 Gift Product', 'admin_gift')]);
-    if (has('users')) rows.push([Markup.button.callback('👥 Users', 'admin_users'), Markup.button.callback('↩️ Refunds', 'admin_refunds')]);
-    if (has('coupons')) rows.push([Markup.button.callback('🎟 Coupons', 'admin_coupons'), Markup.button.callback('🔗 Referral', 'admin_referral')]);
-    if (has('broadcast')) rows.push([Markup.button.callback('📢 Broadcast', 'admin_broadcast'), Markup.button.callback('📩 Direct Message', 'admin_dm')]);
-    if (has('broadcast')) rows.push([Markup.button.callback('📜 Message History', 'admin_msghistory')]);
-    if (owner) rows.push([Markup.button.callback('⚙️ Bot Settings', 'admin_settings'), Markup.button.callback('🔘 Menu Buttons', 'admin_menubuttons')]);
-    if (owner) rows.push([Markup.button.callback('👑 Pro Plan', 'admin_proplan'), Markup.button.callback('🎯 Check-in', 'admin_checkin')]);
-    if (has('orders')) rows.push([Markup.button.callback('📊 Sales Report', 'admin_report'), Markup.button.callback('🏆 Leaderboard', 'admin_leaderboard')]);
-    if (owner) rows.push([Markup.button.callback('🧑‍💼 Staff', 'admin_staff'), Markup.button.callback('💾 Backup Data', 'admin_backup')]);
+    let text;
+
+    if (owner) {
+      text = `${ui.banner('🛠 ADMIN PANEL', '✦ OWNER CONTROL ✦')}\n\nChoose a section:`;
+      rows.push([Markup.button.callback('📦 Products', 'admin_products'), Markup.button.callback('🧾 Orders', 'admin_orders')]);
+      rows.push([Markup.button.callback('🎁 Gift Product', 'admin_gift'), Markup.button.callback('🔗 Refer-Lock', 'admin_referlock')]);
+      rows.push([Markup.button.callback('👥 Users', 'admin_users'), Markup.button.callback('↩️ Refunds', 'admin_refunds')]);
+      rows.push([Markup.button.callback('🎟 Coupons', 'admin_coupons'), Markup.button.callback('🔗 Referral', 'admin_referral')]);
+      rows.push([Markup.button.callback('📢 Broadcast', 'admin_broadcast'), Markup.button.callback('📩 Direct Message', 'admin_dm')]);
+      rows.push([Markup.button.callback('📜 Message History', 'admin_msghistory')]);
+      rows.push([Markup.button.callback('⚙️ Bot Settings', 'admin_settings'), Markup.button.callback('🔘 Menu Buttons', 'admin_menubuttons')]);
+      rows.push([Markup.button.callback('👑 Pro Plan', 'admin_proplan'), Markup.button.callback('🎯 Check-in', 'admin_checkin')]);
+      rows.push([Markup.button.callback('📊 Sales Report', 'admin_report'), Markup.button.callback('🏆 Leaderboard', 'admin_leaderboard')]);
+      rows.push([Markup.button.callback('🧑‍💼 Staff', 'admin_staff'), Markup.button.callback('🧩 Features', 'admin_features')]);
+      rows.push([Markup.button.callback('💾 Backup Data', 'admin_backup')]);
+    } else {
+      const perms = await fb.getStaffPermissions(ctx.from.id);
+      const open = (perm) => perms.includes(perm) && !(perm === 'gift' && !cfg.giftEnabled);
+      // Every feature is always VISIBLE; locked ones show 🔒 until the owner unlocks them.
+      const cell = (perm, label, cb) => open(perm)
+        ? Markup.button.callback(label, cb)
+        : Markup.button.callback('🔒 ' + label.replace(/^\S+\s/, ''), `admin_locked_${perm}`);
+      const total = Object.keys(PERM_LABELS).length;
+      const unlocked = Object.keys(PERM_LABELS).filter(open).length;
+      text = `${ui.banner('🛠 STAFF PANEL', '✦ YOUR WORKSPACE ✦')}\n\n🔓 Unlocked: *${unlocked}/${total}* features\n_🔒 wale features owner unlock karega tabhi chalenge._\n\nChoose a section:`;
+      rows.push([cell('products', '📦 My Products', 'admin_products'), cell('products', '➕ Add Product', 'admin_addproduct')]);
+      rows.push([cell('gift', '🎁 Gift Product', 'admin_gift'), cell('coupons', '🎟 My Coupons', 'admin_coupons')]);
+      rows.push([cell('orders', '🧾 My Orders', 'admin_orders'), cell('stats', '📊 My Stats', 'admin_mystats')]);
+      rows.push([cell('stock', '📦 Stock Manager', 'admin_stock'), cell('referlock', '🔗 Refer-Lock', 'admin_referlock')]);
+      rows.push([cell('links', '🔗 Share Links', 'admin_links'), cell('users', '👥 Users', 'admin_users')]);
+      rows.push([cell('broadcast', '📢 Broadcast', 'admin_broadcast'), cell('broadcast', '📩 Direct Message', 'admin_dm')]);
+      rows.push([cell('broadcast', '📜 Message History', 'admin_msghistory')]);
+      rows.push([Markup.button.callback('👤 My Profile', 'admin_myprofile'), Markup.button.callback('💬 Contact Owner', 'admin_contactowner')]);
+    }
     rows.push([Markup.button.callback('🏠 Home', 'menu_home')]);
 
     const buttons = Markup.inlineKeyboard(rows);
@@ -166,7 +203,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ PRODUCTS ============
 
   bot.action('admin_products', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     await ctx.answerCbQuery();
     await sendProductsList(ctx);
   });
@@ -203,7 +240,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_prod_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     const productId = ctx.match[1];
     const p = await fb.getProduct(productId);
     if (!p) return ctx.answerCbQuery('Product not found.');
@@ -238,7 +275,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============================================================
   // STAFF SETTINGS (owner) — fee, open/close, permissions, limits
   // ============================================================
-  const PERM_LABELS = { products: '📦 Products', orders: '🧾 Orders', users: '👥 Users', coupons: '🎟 Coupons', broadcast: '📢 Broadcast' };
+  const PERM_LABELS = { products: '📦 Products', gift: '🎁 Gift', coupons: '🎟 Coupons', orders: '🧾 Orders', stats: '📊 Stats', stock: '📦 Stock', referlock: '🔗 Refer-Lock', links: '🔗 Links', users: '👥 Users', broadcast: '📢 Broadcast' };
   const onOff = (v) => (v ? 'ON 🟢' : 'OFF 🔴');
 
   async function sendStaffSettings(ctx) {
@@ -250,7 +287,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
       `↩️ Refund fee if rejected: *${onOff(c.refundOnReject)}*\n` +
       `🎁 Staff gifting: *${onOff(c.giftEnabled)}*\n` +
       `🎁 Gifts per staff / day: *${c.giftDailyLimit > 0 ? c.giftDailyLimit : 'Unlimited'}*\n` +
-      `📦 Max products per staff: *${c.maxProducts > 0 ? c.maxProducts : 'Unlimited'}*\n\n` +
+      `📦 Max products per staff: *${c.maxProducts > 0 ? c.maxProducts : 'Unlimited'}*\n` +
+      `🎟 Max staff coupon discount: *${c.couponMaxPercent}%*\n\n` +
       `🔐 *Permissions for newly approved staff:*\n${Object.entries(PERM_LABELS).map(([k, l]) => `${c.defaultPerms.includes(k) ? '✅' : '⬜'} ${l}`).join('\n')}`;
 
     const rows = [
@@ -260,7 +298,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
       [Markup.button.callback(`🎁 Staff Gifting: ${onOff(c.giftEnabled)}`, 'admin_ss_toggle_giftEnabled')],
       [Markup.button.callback('🎁 Set Daily Gift Limit', 'admin_ss_edit_giftDailyLimit')],
       [Markup.button.callback('📦 Set Max Products / Staff', 'admin_ss_edit_maxProducts')],
-      Object.entries(PERM_LABELS).filter(([k]) => k !== 'products').map(([k, l]) => Markup.button.callback(`${c.defaultPerms.includes(k) ? '✅' : '⬜'} ${l.split(' ')[1]}`, `admin_ss_perm_${k}`)),
+      [Markup.button.callback('🎟 Set Max Coupon Discount %', 'admin_ss_edit_couponMaxPercent')],
+      ...chunk(Object.entries(PERM_LABELS).filter(([k]) => k !== 'products').map(([k, l]) => Markup.button.callback(`${c.defaultPerms.includes(k) ? '✅' : '⬜'} ${l.split(' ')[1]}`, `admin_ss_perm_${k}`)), 3),
       [Markup.button.callback('⬅️ Back', 'admin_staff')]
     ];
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
@@ -282,7 +321,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await sendStaffSettings(ctx);
   });
 
-  bot.action(/^admin_ss_perm_(orders|users|coupons|broadcast)$/, async (ctx) => {
+  bot.action(/^admin_ss_perm_(gift|coupons|orders|stats|stock|referlock|links|users|broadcast)$/, async (ctx) => {
     if (!(await isOwner(ctx))) return;
     const perm = ctx.match[1];
     const c = await fb.getStaffSettings();
@@ -296,9 +335,10 @@ function setupAdminPanel(bot, fb, mdEscape) {
   const SS_PROMPTS = {
     applyFee: '💰 Application fee kitni rakhni hai? (₹ number, 0 = free)',
     giftDailyLimit: '🎁 Ek staff din mein kitne gifts de sakta hai? (0 = unlimited)',
-    maxProducts: '📦 Ek staff kitne products submit kar sakta hai? (0 = unlimited)'
+    maxProducts: '📦 Ek staff kitne products submit kar sakta hai? (0 = unlimited)',
+    couponMaxPercent: '🎟 Staff coupon se maximum kitne % discount mil sakta hai? (1-100)'
   };
-  bot.action(/^admin_ss_edit_(applyFee|giftDailyLimit|maxProducts)$/, async (ctx) => {
+  bot.action(/^admin_ss_edit_(applyFee|giftDailyLimit|maxProducts|couponMaxPercent)$/, async (ctx) => {
     if (!(await isOwner(ctx))) return;
     const key = ctx.match[1];
     await ctx.answerCbQuery();
@@ -317,7 +357,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
       `📦 Products submitted: ${myProducts.length} (live: ${myProducts.filter(p => p.active).length})\n🎁 Gifts given: ${gifts}\n\n` +
       `🔐 *Permissions:*\n${Object.entries(PERM_LABELS).map(([k, l]) => `${s.permissions.includes(k) ? '✅' : '⬜'} ${l}`).join('\n')}`;
     const rows = [
-      Object.entries(PERM_LABELS).filter(([k]) => k !== 'products').map(([k, l]) => Markup.button.callback(`${s.permissions.includes(k) ? '✅' : '⬜'} ${l.split(' ')[1]}`, `admin_staffperm_${id}_${k}`)),
+      ...chunk(Object.entries(PERM_LABELS).filter(([k]) => k !== 'products').map(([k, l]) => Markup.button.callback(`${s.permissions.includes(k) ? '✅' : '⬜'} ${l.split(' ')[1]}`, `admin_staffperm_${id}_${k}`)), 3),
       [Markup.button.callback('🗑 Remove Staff', `admin_removestaff_${id}`)],
       [Markup.button.callback('⬅️ Back', 'admin_staff')]
     ];
@@ -331,7 +371,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await sendStaffView(ctx, ctx.match[1]);
   });
 
-  bot.action(/^admin_staffperm_(\d+)_(orders|users|coupons|broadcast)$/, async (ctx) => {
+  bot.action(/^admin_staffperm_(\d+)_(gift|coupons|orders|stats|stock|referlock|links|users|broadcast)$/, async (ctx) => {
     if (!(await isOwner(ctx))) return;
     const [, id, perm] = ctx.match;
     const s = await fb.getStaff(id);
@@ -383,21 +423,20 @@ function setupAdminPanel(bot, fb, mdEscape) {
   bot.action('admin_noop', async (ctx) => { await ctx.answerCbQuery(); });
 
   bot.action('admin_gift', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
-    if (!(await hasPerm(ctx, 'products'))) return;
+    if (!(await needPerm(ctx, 'gift'))) return;
     await ctx.answerCbQuery();
     delete adminState[ctx.from.id];
     await sendGiftPicker(ctx, 0);
   });
 
   bot.action(/^admin_giftpage_(\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'gift'))) return;
     await ctx.answerCbQuery();
     await sendGiftPicker(ctx, parseInt(ctx.match[1], 10));
   });
 
   bot.action(/^admin_giftprod_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'gift'))) return;
     const id = ctx.match[1];
     const p = await fb.getProduct(id);
     const owner = await isOwner(ctx);
@@ -415,7 +454,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action('admin_giftgo', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'gift'))) return;
     const st = adminState[ctx.from.id];
     if (!st || st.step !== 'gift_confirm') return ctx.answerCbQuery('Session expire — dobara Gift Product kholo.', { show_alert: true });
     const { productId, targetId } = st.data;
@@ -482,6 +521,144 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
   });
 
+
+  // ============================================================
+  // STAFF PANEL FEATURES (each one is unlocked per staff by the owner)
+  // ============================================================
+  bot.action(/^admin_locked_(\w+)$/, async (ctx) => {
+    const label = (PERM_LABELS[ctx.match[1]] || ctx.match[1]).replace(/^\S+\s/, '');
+    const cfg = await fb.getStaffSettings();
+    const extra = ctx.match[1] === 'gift' && !cfg.giftEnabled ? ' (owner ne gifting band ki hai)' : '';
+    await ctx.answerCbQuery(`🔒 ${label} abhi locked hai${extra}. Owner se unlock karwao (Contact Owner button use karo).`, { show_alert: true });
+  });
+
+  const productsFor = async (ctx) => {
+    const owner = await isOwner(ctx);
+    return Object.entries(await fb.getAllProducts(false)).filter(([, p]) => owner || String(p.submittedBy) === String(ctx.from.id));
+  };
+  const ownsProduct = async (ctx, p) => (await isOwner(ctx)) || String(p.submittedBy) === String(ctx.from.id);
+
+  // ---- 📊 My Stats ----
+  bot.action('admin_mystats', async (ctx) => {
+    if (!(await needPerm(ctx, 'stats'))) return;
+    await ctx.answerCbQuery();
+    const id = String(ctx.from.id);
+    const prods = await productsFor(ctx);
+    const ids = new Set(prods.map(([k]) => k));
+    const allOrders = Object.values(await fb.getAllOrders());
+    const sales = allOrders.filter(o => ids.has(o.productId) && (o.status === 'paid' || o.status === 'delivered') && o.paymentMethod !== 'gift');
+    const now = Date.now(), day = 86400000;
+    const agg = (since) => { const l = sales.filter(o => o.createdAt >= since); return { n: l.length, rev: l.reduce((s, o) => s + (o.amount || 0), 0) }; };
+    const w = agg(now - 7 * day), m = agg(now - 30 * day), all = agg(0);
+    const views = prods.reduce((s, [, p]) => s + (p.views || 0), 0);
+    const gifts = allOrders.filter(o => o.paymentMethod === 'gift' && String(o.giftedBy) === id).length;
+    const count = {}; sales.forEach(o => { count[o.productName] = (count[o.productName] || 0) + 1; });
+    const top = Object.entries(count).sort((x, y) => y[1] - x[1])[0];
+    const text = `${ui.banner('📊 MY STATS', '✦ YOUR PRODUCTS ✦')}\n\n` +
+      `📦 Products: ${prods.length} (live: ${prods.filter(([, p]) => p.active).length})\n👁 Total views: ${views}\n🎁 Gifts given: ${gifts}\n\n` +
+      `🗓 *Last 7 days:* ${w.n} sales · ₹${w.rev}\n🗓 *Last 30 days:* ${m.n} sales · ₹${m.rev}\n🏁 *All time:* ${all.n} sales · ₹${all.rev}\n\n` +
+      `🏆 Top product: ${top ? `${mdEscape(top[0])} (${top[1]})` : '—'}`;
+    await ctx.reply(text, { parse_mode: 'Markdown', ...adminBackButton() });
+  });
+
+  // ---- 📦 Stock Manager ----
+  bot.action('admin_stock', async (ctx) => {
+    if (!(await needPerm(ctx, 'stock'))) return;
+    await ctx.answerCbQuery();
+    const list = await productsFor(ctx);
+    let text = `${ui.banner('📦 STOCK MANAGER', '✦ UPDATE STOCK ✦')}\n\n`;
+    if (!list.length) text += '_Koi product nahi hai._';
+    const rows = list.slice(0, 25).map(([id, p]) => [Markup.button.callback(`${p.name.slice(0, 26)} · ${p.stock === -1 || p.stock === undefined ? '∞' : p.stock}`, `admin_stockedit_${id}`)]);
+    rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
+    text += list.length ? 'Jis product ka stock badalna hai usse chuno:' : '';
+    try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+    catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+  });
+
+  bot.action(/^admin_stockedit_(.+)$/, async (ctx) => {
+    if (!(await needPerm(ctx, 'stock'))) return;
+    const p = await fb.getProduct(ctx.match[1]);
+    if (!p || !(await ownsProduct(ctx, p))) return ctx.answerCbQuery('⛔ Not allowed.', { show_alert: true });
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'stock_edit', data: { productId: ctx.match[1] } };
+    await ctx.reply(`📦 *${mdEscape(p.name)}*\nAbhi stock: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n\nNaya stock number bhejo (-1 = unlimited):`, { parse_mode: 'Markdown' });
+  });
+
+  // ---- 🔗 Refer-Lock manager (free products) ----
+  bot.action('admin_referlock', async (ctx) => {
+    if (!(await needPerm(ctx, 'referlock'))) return;
+    await ctx.answerCbQuery();
+    const list = (await productsFor(ctx)).filter(([, p]) => p.price === 0);
+    let text = `${ui.banner('🔗 REFER-LOCK', '✦ FREE PRODUCTS ✦')}\n\nFree product ko unlock karne ke liye user ko friends refer karne padte hain.\n\n`;
+    text += list.length ? 'Product chuno:' : '_Koi FREE product nahi hai. Refer-lock sirf free products par lagta hai._';
+    const rows = list.slice(0, 25).map(([id, p]) => [Markup.button.callback(`${p.name.slice(0, 26)} · ${p.referToUnlock > 0 ? '🔒 ' + p.referToUnlock : 'no lock'}`, `admin_rlset_${id}`)]);
+    rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
+    try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+    catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+  });
+
+  bot.action(/^admin_rlset_(.+)$/, async (ctx) => {
+    if (!(await needPerm(ctx, 'referlock'))) return;
+    const p = await fb.getProduct(ctx.match[1]);
+    if (!p || p.price !== 0 || !(await ownsProduct(ctx, p))) return ctx.answerCbQuery('⛔ Not allowed.', { show_alert: true });
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'rl_edit', data: { productId: ctx.match[1] } };
+    await ctx.reply(`🔒 *${mdEscape(p.name)}*\nAbhi: ${p.referToUnlock > 0 ? p.referToUnlock + ' referrals' : 'koi lock nahi'}\n\nKitne referrals chahiye? (0 = lock hatao, max 100)`, { parse_mode: 'Markdown' });
+  });
+
+  // ---- 🔗 Share Links ----
+  bot.action('admin_links', async (ctx) => {
+    if (!(await needPerm(ctx, 'links'))) return;
+    await ctx.answerCbQuery();
+    const me = await botUsername();
+    const live = (await productsFor(ctx)).filter(([, p]) => p.active);
+    let text = `🔗 SHARE LINKS\n\n`;
+    if (!live.length) text += 'Abhi koi live product nahi hai (approval ke baad link milega).';
+    live.slice(0, 25).forEach(([id, p]) => { text += `📦 ${p.name} (${p.price === 0 ? 'FREE' : '₹' + p.price})\nhttps://t.me/${me}?start=PROD_${id}\n\n`; });
+    await ctx.reply(text, { disable_web_page_preview: true, ...adminBackButton() });
+  });
+
+  // ---- 👤 My Profile ----
+  bot.action('admin_myprofile', async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    await ctx.answerCbQuery();
+    const id = String(ctx.from.id);
+    const s = await fb.getStaff(id);
+    if (!s) return;
+    const mine = (await productsFor(ctx));
+    const gifts = Object.values(await fb.getAllOrders()).filter(o => o.paymentMethod === 'gift' && String(o.giftedBy) === id).length;
+    const text = `${ui.banner('👤 MY PROFILE', '✦ STAFF ✦')}\n\n` +
+      `✨ ${mdEscape(s.fullName || ctx.from.first_name || 'Staff')}\n🆔 \`${id}\`${s.phone ? `\n📱 \`${s.phone}\`` : ''}\n📅 Staff since: ${s.addedAt ? new Date(s.addedAt).toLocaleDateString() : '-'}\n📦 Products: ${mine.length}\n🎁 Gifts: ${gifts}\n\n` +
+      `🔐 *Features:*\n${Object.entries(PERM_LABELS).map(([k, l]) => `${s.permissions.includes(k) ? '🔓' : '🔒'} ${l}`).join('\n')}`;
+    await ctx.reply(text, { parse_mode: 'Markdown', ...adminBackButton() });
+  });
+
+  // ---- 💬 Contact Owner ----
+  const lastContact = {};
+  bot.action('admin_contactowner', async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'staff_contact', data: {} };
+    await ctx.reply('💬 Owner ko kya message bhejna hai? (jaise: kaunsa feature unlock karwana hai)');
+  });
+
+  // ---- coupon scope picker (staff) ----
+  bot.action(/^admin_cpnscope_(.+)$/, async (ctx) => {
+    if (!(await needPerm(ctx, 'coupons'))) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'coupon_scope') return ctx.answerCbQuery('Session expire — dobara Create Coupon dabao.', { show_alert: true });
+    const pick = ctx.match[1];
+    if (pick !== 'all') {
+      const p = await fb.getProduct(pick);
+      if (!p || !(await ownsProduct(ctx, p))) return ctx.answerCbQuery('⛔ Not allowed.', { show_alert: true });
+    }
+    st.data.productId = pick === 'all' ? null : pick;
+    st.step = 'coupon_type';
+    await ctx.answerCbQuery();
+    const cfg = await fb.getStaffSettings();
+    await ctx.reply(`Step 3/5 — Discount type? Reply "flat" (₹ amount) ya "percent" (max ${cfg.couponMaxPercent}%)`, Markup.keyboard(['flat', 'percent']).oneTime().resize());
+  });
+
   // ---- Approve / reject staff-submitted products (owner only) ----
   bot.action(/^admin_approveprod_(.+)$/, async (ctx) => {
     if (!(await isOwner(ctx))) return;
@@ -516,7 +693,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_prodlink_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     const productId = ctx.match[1];
     const lp = await fb.getProduct(productId);
     if (!lp) return ctx.answerCbQuery('Not found.');
@@ -530,7 +707,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_delprod_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     const productId = ctx.match[1];
     const p = await fb.getProduct(productId);
     if (!p) return ctx.answerCbQuery('Not found.');
@@ -554,7 +731,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_confirmdelprod_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     const productId = ctx.match[1];
     const dp = await fb.getProduct(productId);
     if (dp && !canManageProduct(ctx, dp)) return ctx.answerCbQuery('⛔ Not allowed.', { show_alert: true });
@@ -566,7 +743,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ---- Add / Edit product flow (conversational) ----
 
   bot.action('admin_addproduct', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     if (!(await isOwner(ctx))) {
       const cfg = await fb.getStaffSettings();
       if (cfg.maxProducts > 0) {
@@ -580,7 +757,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_editprod_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'products'))) return;
     const productId = ctx.match[1];
     const p = await fb.getProduct(productId);
     if (!p) return ctx.answerCbQuery('Not found.');
@@ -593,14 +770,19 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ ORDERS ============
 
   bot.action('admin_orders', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'orders'))) return;
     await ctx.answerCbQuery();
     await sendOrdersMenu(ctx, 'all', 0);
   });
 
   async function sendOrdersMenu(ctx, filter = 'all', page = 0) {
+    const ownerView = await isOwner(ctx);
     const orders = await fb.getAllOrders();
     let list = Object.entries(orders).sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+    if (!ownerView) {
+      const mine = new Set(Object.entries(await fb.getAllProducts(false)).filter(([, p]) => String(p.submittedBy) === String(ctx.from.id)).map(([k]) => k));
+      list = list.filter(([, o]) => mine.has(o.productId) && o.paymentMethod !== 'gift');
+    }
     if (filter !== 'all') list = list.filter(([, o]) => o.status === filter);
 
     const pageSize = 10;
@@ -623,7 +805,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
     pageItems.forEach(([id, o]) => {
       const emoji = o.status === 'delivered' ? '✅' : o.status === 'pending' ? '⏳' : o.status === 'failed' ? '❌' : o.status === 'refunded' ? '↩️' : '🔄';
-      const label = `${emoji} ${o.productName} — ₹${o.amount} (${o.userId})`;
+      const label = ownerView ? `${emoji} ${o.productName} — ₹${o.amount} (${o.userId})` : `${emoji} ${o.productName} — ₹${o.amount}`;
       buttons.push([Markup.button.callback(label.slice(0, 60), `admin_orderdetail_${id}`)]);
     });
 
@@ -638,29 +820,34 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_orderf_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'orders'))) return;
     await ctx.answerCbQuery();
     await sendOrdersMenu(ctx, ctx.match[1], 0);
   });
 
   bot.action(/^admin_orderpage_(\w+)_(\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'orders'))) return;
     await ctx.answerCbQuery();
     await sendOrdersMenu(ctx, ctx.match[1], parseInt(ctx.match[2]));
   });
 
   bot.action(/^admin_orderdetail_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'orders'))) return;
     const orderId = ctx.match[1];
     const o = await fb.getOrder(orderId);
     if (!o) return ctx.answerCbQuery('Not found.');
+    const ownerView = await isOwner(ctx);
+    if (!ownerView) {
+      const op = await fb.getProduct(o.productId);
+      if (!op || String(op.submittedBy) !== String(ctx.from.id)) return ctx.answerCbQuery('⛔ Yeh aapke product ka order nahi hai.', { show_alert: true });
+    }
     await ctx.answerCbQuery();
 
     const emoji = o.status === 'delivered' ? '✅' : o.status === 'pending' ? '⏳' : o.status === 'failed' ? '❌' : o.status === 'refunded' ? '↩️' : '🔄';
     let text = `${emoji} *Order Details*\n\n`;
     text += `📦 Product: ${mdEscape(o.productName)}\n`;
     text += `💰 Amount: ₹${o.amount}${o.originalAmount && o.originalAmount !== o.amount ? ` (original ₹${o.originalAmount})` : ''}\n`;
-    text += `👤 User: \`${o.userId}\`\n`;
+    if (ownerView) text += `👤 User: \`${o.userId}\`\n`;
     text += `💳 Method: ${o.paymentMethod || 'unknown'}\n`;
     text += `📊 Status: ${o.status}\n`;
     if (o.utr) text += `🔢 UTR: \`${o.utr}\`\n`;
@@ -672,7 +859,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.reply(text, {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('👤 View User', `admin_viewuser_${o.userId}`)],
+        ...(ownerView ? [[Markup.button.callback('👤 View User', `admin_viewuser_${o.userId}`)]] : []),
         [Markup.button.callback('⬅️ Back to Orders', 'admin_orders')]
       ])
     });
@@ -681,7 +868,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ USERS ============
 
   bot.action('admin_users', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     await ctx.answerCbQuery();
     await sendUsersList(ctx, 0);
   });
@@ -711,19 +898,19 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_userspage_(\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     await ctx.answerCbQuery();
     await sendUsersList(ctx, parseInt(ctx.match[1]));
   });
 
   bot.action(/^admin_viewuser_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     await ctx.answerCbQuery();
     await sendUserDetails(ctx, ctx.match[1]);
   });
 
   bot.action('admin_usersearch', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'awaiting_user_lookup' };
     await ctx.reply('🔍 Send a Telegram ID to view details:', adminBackButton('admin_users'));
@@ -773,7 +960,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_wallet_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await isOwner(ctx))) return;
     const telegramId = ctx.match[1];
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'awaiting_wallet_amount', data: { telegramId } };
@@ -781,7 +968,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_banuser_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     const telegramId = ctx.match[1];
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'awaiting_ban_reason', data: { telegramId } };
@@ -789,7 +976,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_unban_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     const telegramId = ctx.match[1];
     await fb.unbanUser(telegramId);
     await ctx.answerCbQuery('✅ Unbanned');
@@ -797,7 +984,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_msguser_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'users'))) return;
     const telegramId = ctx.match[1];
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'dm_message', data: { telegramId } };
@@ -807,7 +994,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ REFUNDS ============
 
   bot.action('admin_refunds', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await isOwner(ctx))) return;
     await ctx.answerCbQuery();
     await sendRefundsList(ctx);
   });
@@ -829,7 +1016,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_refund_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await isOwner(ctx))) return;
     const orderId = ctx.match[1];
     const order = await fb.getOrder(orderId);
     if (!order) return ctx.answerCbQuery('Not found.');
@@ -847,7 +1034,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_approverefund_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await isOwner(ctx))) return;
     const orderId = ctx.match[1];
     await fb.processRefund(orderId, true);
     await ctx.answerCbQuery('✅ Refund approved');
@@ -855,7 +1042,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_rejectrefund_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await isOwner(ctx))) return;
     const orderId = ctx.match[1];
     await fb.processRefund(orderId, false);
     await ctx.answerCbQuery('❌ Refund rejected');
@@ -865,18 +1052,20 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ COUPONS ============
 
   bot.action('admin_coupons', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'coupons'))) return;
     await ctx.answerCbQuery();
     await sendCouponsList(ctx);
   });
 
   async function sendCouponsList(ctx) {
+    const ownerView = await isOwner(ctx);
     const coupons = await fb.getAllCoupons();
-    const entries = Object.entries(coupons);
+    const entries = Object.entries(coupons).filter(([, c]) => ownerView || String(c.ownerStaffId) === String(ctx.from.id));
 
-    let text = `🎟 *Coupons* (${entries.length})\n\n`;
+    let text = `🎟 *${ownerView ? 'Coupons' : 'My Coupons'}* (${entries.length})\n\n`;
     entries.forEach(([code, c]) => {
-      text += `${c.active ? '✅' : '🚫'} \`${code}\` — ${c.discountType === 'percent' ? c.discountValue + '%' : '₹' + c.discountValue} off (used ${c.usedCount || 0}${c.usageLimit ? '/' + c.usageLimit : ''})\n`;
+      const scope = c.ownerStaffId ? (c.productId ? ' 📦 1 product' : ' 📦 all own') + (ownerView ? ' 🧑‍💼 staff' : '') : '';
+      text += `${c.active ? '✅' : '🚫'} \`${code}\` — ${c.discountType === 'percent' ? c.discountValue + '%' : '₹' + c.discountValue} off (used ${c.usedCount || 0}${c.usageLimit ? '/' + c.usageLimit : ''})${scope}\n`;
     });
     if (entries.length === 0) text += '_No coupons yet._';
 
@@ -891,10 +1080,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_coupon_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'coupons'))) return;
     const code = ctx.match[1];
     const coupon = await fb.getCoupon(code);
     if (!coupon) return ctx.answerCbQuery('Not found.');
+    if (!(await isOwner(ctx)) && String(coupon.ownerStaffId) !== String(ctx.from.id)) return ctx.answerCbQuery('⛔ Yeh aapka coupon nahi hai.', { show_alert: true });
     await ctx.answerCbQuery();
     await ctx.reply(`🎟 \`${code}\`\n\n${coupon.active ? '✅ Active' : '🚫 Disabled'}`, {
       parse_mode: 'Markdown',
@@ -906,17 +1096,18 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_togglecoupon_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'coupons'))) return;
     const code = ctx.match[1];
     const coupon = await fb.getCoupon(code);
     if (!coupon) return ctx.answerCbQuery('Not found.');
+    if (!(await isOwner(ctx)) && String(coupon.ownerStaffId) !== String(ctx.from.id)) return ctx.answerCbQuery('⛔ Yeh aapka coupon nahi hai.', { show_alert: true });
     await fb.toggleCoupon(code, !coupon.active);
     await ctx.answerCbQuery(coupon.active ? '🚫 Disabled' : '✅ Enabled');
     await sendCouponsList(ctx);
   });
 
   bot.action('admin_addcoupon', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'coupons'))) return;
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'coupon_code', data: {} };
     await ctx.reply('🎟 *New Coupon*\n\nStep 1/4 — Coupon code? (e.g. WELCOME50)', { parse_mode: 'Markdown' });
@@ -944,7 +1135,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ BROADCAST ============
 
   bot.action('admin_broadcast', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'bc_message', data: {} };
     await ctx.reply('📢 *Broadcast*\n\nType the message to send to all users:', { parse_mode: 'Markdown', ...adminBackButton('admin_home') });
@@ -953,7 +1144,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ DIRECT MESSAGE ============
 
   bot.action('admin_dm', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     await ctx.answerCbQuery();
     await sendDmUserPicker(ctx, 0);
   });
@@ -983,13 +1174,13 @@ function setupAdminPanel(bot, fb, mdEscape) {
   }
 
   bot.action(/^admin_dmpage_(\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     await ctx.answerCbQuery();
     await sendDmUserPicker(ctx, parseInt(ctx.match[1]));
   });
 
   bot.action(/^admin_dmpick_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     const telegramId = ctx.match[1];
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'dm_message', data: { telegramId } };
@@ -997,7 +1188,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action('admin_dmbyid', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'dm_userid', data: {} };
     await ctx.reply('📩 Enter the Telegram ID to message:', adminBackButton('admin_dm'));
@@ -1270,7 +1461,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ MESSAGE HISTORY ============
 
   bot.action('admin_msghistory', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     await ctx.answerCbQuery();
     await ctx.reply('📜 *Message History*\n\nChoose which history to view:', {
       parse_mode: 'Markdown',
@@ -1283,7 +1474,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_dmhistory_(\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     const page = parseInt(ctx.match[1]);
     await ctx.answerCbQuery();
     const queue = await fb.getDmQueue();
@@ -1311,14 +1502,14 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_unsenddm_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     const id = ctx.match[1];
     await fb.updateDmEntry(id, { deleteRequested: true });
     await ctx.answerCbQuery('📤 Unsend requested — processing...');
   });
 
   bot.action(/^admin_bchistory_(\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     const page = parseInt(ctx.match[1]);
     await ctx.answerCbQuery();
     const queue = await fb.getBroadcastQueue();
@@ -1345,7 +1536,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   });
 
   bot.action(/^admin_unsendbc_(.+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
+    if (!(await needPerm(ctx, 'broadcast'))) return;
     const id = ctx.match[1];
     await fb.updateBroadcastEntry(id, { deleteRequested: true });
     await ctx.answerCbQuery('📤 Unsend requested — processing for all recipients...');
@@ -1418,7 +1609,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ SALES REPORT ============
 
   bot.action('admin_report', async (ctx) => {
-    if (!(await hasPerm(ctx, 'orders'))) return;
+    if (!(await isOwner(ctx))) return;
     await ctx.answerCbQuery();
     const weekly = await fb.getSalesReport(7);
     const monthly = await fb.getSalesReport(30);
@@ -1429,7 +1620,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ============ LEADERBOARD ============
 
   bot.action('admin_leaderboard', async (ctx) => {
-    if (!(await hasPerm(ctx, 'orders'))) return;
+    if (!(await isOwner(ctx))) return;
     await ctx.answerCbQuery();
     const [buyers, referrers] = await Promise.all([fb.getTopBuyers(5), fb.getTopReferrers(5)]);
     let text = '🏆 *Leaderboard*\n\n💰 *Top Buyers*\n';
@@ -1720,10 +1911,46 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
 
     // ---- Add staff ----
+    if (state.step === 'stock_edit') {
+      const p = await fb.getProduct(state.data.productId);
+      if (!p || !(await ownsProduct(ctx, p)) || !(await hasPerm(ctx, 'stock'))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed.'); return true; }
+      const n = parseInt(text, 10);
+      if (isNaN(n) || n < -1 || n > 1000000) { await ctx.reply('⚠️ Number daalo (-1 = unlimited).'); return true; }
+      await fb.updateProduct(state.data.productId, { stock: n });
+      delete adminState[ctx.from.id];
+      await ctx.reply(`✅ Stock updated: *${mdEscape(p.name)}* → ${n === -1 ? 'Unlimited' : n}`, { parse_mode: 'Markdown', ...adminBackButton('admin_stock') });
+      return true;
+    }
+
+    if (state.step === 'rl_edit') {
+      const p = await fb.getProduct(state.data.productId);
+      if (!p || p.price !== 0 || !(await ownsProduct(ctx, p)) || !(await hasPerm(ctx, 'referlock'))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed.'); return true; }
+      const n = parseInt(text, 10);
+      if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
+      await fb.updateProduct(state.data.productId, { referToUnlock: n });
+      delete adminState[ctx.from.id];
+      await ctx.reply(`✅ *${mdEscape(p.name)}*: ${n > 0 ? `ab ${n} referrals chahiye` : 'lock hata diya'}`, { parse_mode: 'Markdown', ...adminBackButton('admin_referlock') });
+      return true;
+    }
+
+    if (state.step === 'staff_contact') {
+      if (text.length < 5 || text.length > 500) { await ctx.reply('⚠️ Message 5 se 500 characters ka likho.'); return true; }
+      const now = Date.now();
+      if (lastContact[ctx.from.id] && now - lastContact[ctx.from.id] < 60000) { await ctx.reply('⏳ Thodi der baad dobara bhejo.'); return true; }
+      lastContact[ctx.from.id] = now;
+      const s = await fb.getStaff(ctx.from.id);
+      for (const o of ownerIds()) {
+        try { await bot.telegram.sendMessage(o, `💬 *Staff message*\n\n👤 ${mdEscape((s && s.fullName) || ctx.from.first_name || 'Staff')} (\`${ctx.from.id}\`)\n\n${mdEscape(text)}`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('🛠 Staff', `admin_staffview_${ctx.from.id}`)]]) }); } catch (e) {}
+      }
+      delete adminState[ctx.from.id];
+      await ctx.reply('✅ Owner ko message bhej diya gaya.', adminBackButton());
+      return true;
+    }
+
     if (state.step === 'ss_edit') {
       if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
       const n = parseInt(text, 10);
-      if (isNaN(n) || n < 0 || n > 1000000) { await ctx.reply('⚠️ 0 ya usse bada number daalo.'); return true; }
+      if (isNaN(n) || n < 0 || n > 1000000 || (state.data.key === 'couponMaxPercent' && (n < 1 || n > 100))) { await ctx.reply(state.data.key === 'couponMaxPercent' ? '⚠️ 1 se 100 ke beech number daalo.' : '⚠️ 0 ya usse bada number daalo.'); return true; }
       await fb.updateStaffSettings({ [state.data.key]: n });
       delete adminState[ctx.from.id];
       await ctx.reply('✅ Saved.');
@@ -1782,10 +2009,28 @@ function setupAdminPanel(bot, fb, mdEscape) {
   // ---- Coupon creation wizard ----
   async function handleCouponWizard(ctx, state, text) {
     switch (state.step) {
-      case 'coupon_code':
-        state.data.code = text.toUpperCase();
+      case 'coupon_code': {
+        const code = text.toUpperCase();
+        if (!(await isOwner(ctx))) {
+          // Staff: clean code, can never overwrite an existing (e.g. owner's) coupon
+          if (!/^[A-Z0-9_-]{3,20}$/.test(code)) { await ctx.reply('⚠️ Code 3-20 characters ka ho (A-Z, 0-9, - _).'); return true; }
+          if (await fb.getCoupon(code)) { await ctx.reply('⚠️ Yeh code pehle se use mein hai. Doosra code likho.'); return true; }
+          state.data.code = code;
+          state.step = 'coupon_scope';
+          const mine = Object.entries(await fb.getAllProducts(false)).filter(([, p]) => String(p.submittedBy) === String(ctx.from.id));
+          const rows = [[Markup.button.callback('📦 All my products', 'admin_cpnscope_all')],
+            ...mine.slice(0, 8).map(([id, p]) => [Markup.button.callback(`📦 ${p.name.slice(0, 28)}`, `admin_cpnscope_${id}`)])];
+          await ctx.reply('Step 2/5 — Yeh coupon kis product par chalega?', Markup.inlineKeyboard(rows));
+          return true;
+        }
+        state.data.code = code;
         state.step = 'coupon_type';
         await ctx.reply('Step 2/4 — Discount type? Reply "flat" (₹ amount) or "percent" (%)', Markup.keyboard(['flat', 'percent']).oneTime().resize());
+        return true;
+      }
+
+      case 'coupon_scope':
+        await ctx.reply('👆 Upar ke buttons mein se product chuno.');
         return true;
 
       case 'coupon_type': {
@@ -1799,7 +2044,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
       case 'coupon_value': {
         const value = parseInt(text);
-        if (isNaN(value)) { await ctx.reply('⚠️ Valid number daalo.'); return true; }
+        if (isNaN(value) || value < 1) { await ctx.reply('⚠️ Valid number daalo.'); return true; }
+        if (!(await isOwner(ctx)) && state.data.discountType === 'percent') {
+          const cfgC = await fb.getStaffSettings();
+          if (value > cfgC.couponMaxPercent) { await ctx.reply(`⚠️ Owner ne staff coupon ki limit ${cfgC.couponMaxPercent}% rakhi hai. Isse kam daalo.`); return true; }
+        }
         state.data.discountValue = value;
         state.step = 'coupon_limit';
         await ctx.reply('Step 4/4 — Usage limit? (number, or "unlimited")');
@@ -1808,11 +2057,17 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
       case 'coupon_limit': {
         const limit = text.toLowerCase() === 'unlimited' ? null : parseInt(text);
+        const staffExtra = (await isOwner(ctx)) ? {} : {
+          ownerStaffId: String(ctx.from.id),
+          productId: state.data.productId || null,
+          maxPercent: (await fb.getStaffSettings()).couponMaxPercent
+        };
         await fb.createCoupon(state.data.code, {
           discountType: state.data.discountType,
           discountValue: state.data.discountValue,
           usageLimit: isNaN(limit) ? null : limit,
-          minAmount: 0
+          minAmount: 0,
+          ...staffExtra
         });
         delete adminState[ctx.from.id];
         await ctx.reply(`✅ Coupon \`${state.data.code}\` created!`, { parse_mode: 'Markdown' });
@@ -1859,8 +2114,27 @@ function setupAdminPanel(bot, fb, mdEscape) {
         return true;
 
       case 'prod_stock': {
-        const stock = parseInt(text);
-        state.data.stock = isNaN(stock) ? -1 : stock;
+        if (!skip) {
+          const stock = parseInt(text);
+          state.data.stock = isNaN(stock) ? -1 : stock;
+        }
+        if (state.data.price === 0) {
+          state.step = 'prod_refer';
+          await ctx.reply(`🔒 Refer-to-Unlock: is FREE product ko lene ke liye user ko kitne friends refer karne honge? (0 = koi lock nahi, max 100)${state.data.isEdit ? ` Current: ${state.data.referToUnlock || 0}` : ''}`, Markup.removeKeyboard());
+          return true;
+        }
+        state.data.referToUnlock = 0;
+        state.step = 'prod_deliverytype';
+        await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
+        return true;
+      }
+
+      case 'prod_refer': {
+        if (!skip) {
+          const n = parseInt(text);
+          if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
+          state.data.referToUnlock = n;
+        }
         state.step = 'prod_deliverytype';
         await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
         return true;
@@ -1908,6 +2182,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const productData = {
       name: d.name, price: d.price, category: d.category,
       description: d.description || '', stock: d.stock,
+      referToUnlock: d.price === 0 ? (d.referToUnlock || 0) : 0,
       deliveryType: d.deliveryType,
       fileId: d.fileId || '',
       deliveryLink: d.deliveryLink || '',

@@ -209,6 +209,9 @@ img{display:block}
 .kv b{display:block;font-family:var(--display);font-size:18px}
 .kv span{font-size:12px;color:var(--muted)}
 .reflink{word-break:break-all;font-size:13px;background:var(--bg);padding:11px 13px;border-radius:14px;margin:10px 0}
+.lockbox{background:var(--accent-soft);border-radius:20px;padding:14px;margin-bottom:12px}
+.bar{height:8px;border-radius:8px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:8px}
 .seg{display:flex;background:var(--bg);border-radius:16px;padding:4px;margin-bottom:14px}
 .seg:last-child{margin-bottom:0}
 .seg button{flex:1;padding:10px 6px;border-radius:12px;font-weight:700;color:var(--muted);font-size:14px}
@@ -298,7 +301,9 @@ en:{
  e_TOPUP_RANGE:'Amount must be between ₹10 and ₹50,000.', e_PRO_OFF:"VIP plan isn't available right now.", e_ORDER_NOT_FOUND:'Order not found.',
  e_NOT_DOWNLOADABLE:"This order isn't available for download.", e_SEND_FAILED:"Couldn't send it to the bot chat. Press /start in the bot first, then try again.",
  e_BAD_RATING:'Choose a rating from 1 to 5.', e_NOT_BOUGHT:'You can only review after buying.', e_ALREADY_REVIEWED:"You've already reviewed this.",
- e_REFUND_NOT_ALLOWED:"A refund can't be requested for this order.", e_REFUND_EXISTS:'A refund request already exists.'
+ e_REFUND_NOT_ALLOWED:"A refund can't be requested for this order.", e_REFUND_EXISTS:'A refund request already exists.',
+ e_REFER_LOCKED:'Refer more friends to unlock this product.', e_COUPON_SCOPE:'This coupon is not valid for this product.',
+ lock_t:'Refer {need} friends to unlock', lock_s:'You have {have} of {need} referrals. Share your link — every friend who joins counts.', lock_btn:'Share referral link', lock_check:'Check again', lock_use:'Unlocking uses {need} of your referrals.'
 },
 hi:{
  splash_loading:'स्टोर खुल रहा है…', splash_wake:'सर्वर चालू हो रहा है, 20–30 सेकंड लग सकते हैं…',
@@ -359,7 +364,9 @@ hi:{
  e_TOPUP_RANGE:'राशि ₹10 से ₹50,000 के बीच होनी चाहिए।', e_PRO_OFF:'VIP प्लान अभी उपलब्ध नहीं है।', e_ORDER_NOT_FOUND:'ऑर्डर नहीं मिला।',
  e_NOT_DOWNLOADABLE:'यह ऑर्डर डाउनलोड के लिए उपलब्ध नहीं है।', e_SEND_FAILED:'बॉट चैट में भेज नहीं पाए। पहले बॉट में /start दबाएँ, फिर कोशिश करें।',
  e_BAD_RATING:'1 से 5 के बीच रेटिंग चुनें।', e_NOT_BOUGHT:'रिव्यू खरीदने के बाद ही दे सकते हैं।', e_ALREADY_REVIEWED:'आप पहले ही रिव्यू दे चुके हैं।',
- e_REFUND_NOT_ALLOWED:'इस ऑर्डर का रिफंड नहीं माँगा जा सकता।', e_REFUND_EXISTS:'रिफंड रिक्वेस्ट पहले ही हो चुकी है।'
+ e_REFUND_NOT_ALLOWED:'इस ऑर्डर का रिफंड नहीं माँगा जा सकता।', e_REFUND_EXISTS:'रिफंड रिक्वेस्ट पहले ही हो चुकी है।',
+ e_REFER_LOCKED:'इस प्रोडक्ट को अनलॉक करने के लिए और दोस्तों को रेफ़र करें।', e_COUPON_SCOPE:'यह कूपन इस प्रोडक्ट पर मान्य नहीं है।',
+ lock_t:'अनलॉक करने के लिए {need} दोस्तों को रेफ़र करें', lock_s:'आपके {need} में से {have} रेफ़रल हैं। अपना लिंक शेयर करें — जुड़ने वाला हर दोस्त गिना जाएगा।', lock_btn:'रेफ़रल लिंक शेयर करें', lock_check:'फिर से जाँचें', lock_use:'अनलॉक करने पर आपके {need} रेफ़रल खर्च होंगे।'
 },
 hg:{
  splash_loading:'Store khul raha hai…', splash_wake:'Server jag raha hai, 20-30 sec lag sakte hain…',
@@ -420,7 +427,9 @@ hg:{
  e_TOPUP_RANGE:'Amount ₹10 se ₹50,000 ke beech hona chahiye.', e_PRO_OFF:'VIP plan abhi available nahi hai.', e_ORDER_NOT_FOUND:'Order nahi mila.',
  e_NOT_DOWNLOADABLE:'Yeh order download ke liye available nahi hai.', e_SEND_FAILED:'Bot chat mein bhej nahi paye. Pehle bot mein /start dabao, phir try karo.',
  e_BAD_RATING:'Rating 1 se 5 ke beech do.', e_NOT_BOUGHT:'Review sirf khareedne ke baad de sakte ho.', e_ALREADY_REVIEWED:'Aap pehle hi review de chuke ho.',
- e_REFUND_NOT_ALLOWED:'Is order ka refund request nahi ho sakta.', e_REFUND_EXISTS:'Refund request pehle hi ho chuki hai.'
+ e_REFUND_NOT_ALLOWED:'Is order ka refund request nahi ho sakta.', e_REFUND_EXISTS:'Refund request pehle hi ho chuki hai.',
+ e_REFER_LOCKED:'Is product ko unlock karne ke liye aur friends refer karo.', e_COUPON_SCOPE:'Yeh coupon is product par valid nahi hai.',
+ lock_t:'Unlock karne ke liye {need} friends refer karo', lock_s:'Aapke {need} mein se {have} referrals hain. Apna link share karo — jo bhi dost join karega count hoga.', lock_btn:'Referral link share karo', lock_check:'Dobara check karo', lock_use:'Unlock karne par aapke {need} referrals kharch honge.'
 }};
 const LANGS = [['en','English'],['hi','हिन्दी'],['hg','Hinglish']];
 const LOCALE = { en:'en-IN', hi:'hi-IN', hg:'en-IN' };
@@ -600,7 +609,7 @@ function thumb(p) {
 }
 function card(p) {
   const free = p.price === 0, vipFree = !free && S.user.isVip;
-  const tag = free ? `<span class="tag free">${esc(t('free_tag'))}</span>` : vipFree ? `<span class="tag free">${esc(t('vip_free_tag'))}</span>` : `<span class="tag">${rs(p.price)}</span>`;
+  const tag = free ? `<span class="tag free">${p.referToUnlock > 0 ? '🔒 ' : ''}${esc(t('free_tag'))}</span>` : vipFree ? `<span class="tag free">${esc(t('vip_free_tag'))}</span>` : `<span class="tag">${rs(p.price)}</span>`;
   const meta = p.reviewCount ? `<span class="star">★</span> ${p.rating.toFixed(1)} (${p.reviewCount})` : esc(p.category);
   return `<button class="card" data-act="product" data-id="${esc(p.id)}">
     <div class="thumb">${thumb(p)}${tag}${p.soldOut ? `<div class="sold">${esc(t('sold_out'))}</div>` : ''}</div>
@@ -762,8 +771,13 @@ function drawProduct() {
     foot = `<div class="row"><button class="btn" data-act="redeliver" data-id="${esc(P.data.orderId)}">${ico('down')} ${esc(t('resend'))}</button>${shareBtn}</div>`;
   } else if (p.soldOut) {
     foot = `<button class="btn" disabled>${esc(t('out_stock'))}</button>`;
+  } else if (free && P.data.referLock && P.data.referLock.available < P.data.referLock.need) {
+    const L = P.data.referLock, pct = Math.min(100, Math.round((L.available / L.need) * 100));
+    foot = `<div class="lockbox"><b>🔒 ${esc(t('lock_t', { need: L.need }))}</b><div class="muted" style="font-size:13px;margin:4px 0 10px">${esc(t('lock_s', { have: L.available, need: L.need }))}</div><div class="bar"><i style="width:${pct}%"></i></div></div>
+      <div class="row"><button class="btn" data-act="sharelock">${ico('share')} ${esc(t('lock_btn'))}</button><button class="btn alt" style="width:auto" data-act="lockrefresh">${esc(t('lock_check'))}</button></div>`;
   } else if (free) {
-    foot = `<div class="row between" style="margin-bottom:10px"><span class="price">${esc(t('free_word'))}</span>${shareBtn}</div><button class="btn ok" data-act="buy" data-m="free">${esc(t('get_free'))}</button>`;
+    const useNote = (P.data.referLock && P.data.referLock.need > 0) ? `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${esc(t('lock_use', { need: P.data.referLock.need }))}</div>` : '';
+    foot = `<div class="row between" style="margin-bottom:10px"><span class="price">${esc(t('free_word'))}</span>${shareBtn}</div>${useNote}<button class="btn ok" data-act="buy" data-m="free">${esc(t('get_free'))}</button>`;
   } else if (vip) {
     foot = `<div class="row between" style="margin-bottom:10px"><span class="price">${esc(t('vip_free'))}<s>${rs(p.price)}</s></span>${shareBtn}</div><button class="btn ok" data-act="buy" data-m="free">${ico('crown')} ${esc(t('vip_get'))}</button>`;
   } else {
@@ -796,6 +810,7 @@ async function doBuy(method) {
         toast(t('low_bal', { bal: rs(j.balance || 0), need: rs(j.need || 0) }), 'err');
         closeSheet(); S.topupAmt = Math.max(10, Math.ceil((j.need || 100) - (j.balance || 0))); setTab('wallet'); return;
       }
+      if (j.code === 'REFER_LOCKED') { toast(errText(j), 'err'); openProduct(p.id); return; }
       toast(errText(j), 'err'); return;
     }
     if (j.status === 'owned') { toast(t('owned')); P.data.owned = true; drawProduct(); return; }
@@ -958,6 +973,8 @@ const ACT = {
   lang: d => { LANG = d.l; store.set('orvix_lang', LANG); applyTheme(); renderTabs(); renderTab(); haptic(); },
   theme: d => { THEME = d.m; store.set('orvix_theme', THEME); applyTheme(); renderTab(); haptic(); },
   buy: d => doBuy(d.m),
+  sharelock: () => { const L = P.data && P.data.referLock; if (L && L.link) openTg(`https://t.me/share/url?url=${encodeURIComponent(L.link)}&text=${encodeURIComponent(t('share_text'))}`); },
+  lockrefresh: () => { if (P.data) openProduct(P.data.product.id); },
   coupon: async () => {
     const code = ($('#cpn')||{}).value || '';
     if (!code.trim()) return toast(t('e_NO_CODE'), 'err');
