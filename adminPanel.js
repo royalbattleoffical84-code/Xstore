@@ -1635,12 +1635,17 @@ function setupAdminPanel(bot, fb, mdEscape) {
   bot.action('admin_backup', async (ctx) => {
     if (!(await isOwner(ctx))) return;
     await ctx.answerCbQuery('Generating backup...');
+    const st = fb.getStorageStatus();
+    const ago = st.lastPushAt ? `, last sync ${Math.max(0, Math.round((Date.now() - st.lastPushAt) / 1000))}s ago` : '';
+    await ctx.reply(st.enabled
+      ? `✅ Cloud storage: ${st.provider} (pending: ${st.pending}${ago})${st.lastError ? `\n⚠️ Last error: ${st.lastError}` : ''}`
+      : '⚠️ Cloud storage NOT configured — data will be LOST on every redeploy! Set SUPABASE_URL + SUPABASE_SERVICE_KEY on Render.');
     const backup = fb.getFullBackup();
     const json = JSON.stringify(backup, null, 2);
     const buffer = Buffer.from(json, 'utf8');
     await ctx.replyWithDocument(
       { source: buffer, filename: `backup_${new Date().toISOString().slice(0, 10)}.json` },
-      { caption: '💾 Full data backup. Keep this safe — local storage is wiped on every redeploy!' }
+      { caption: '💾 Full data backup. Keep this file safe as an extra copy.' }
     );
   });
 

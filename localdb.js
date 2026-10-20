@@ -14,7 +14,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// DATA_DIR can point at a mounted Render Disk (e.g. /var/data) if you have one.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const storage = require('./storage');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const FILES = {
@@ -46,6 +48,22 @@ function filePath(key) {
   return path.join(DATA_DIR, FILES[key]);
 }
 
+// ---- external persistence (see storage.js) ----
+function readLocalRaw(key) {
+  const fp = filePath(key);
+  try { return fs.existsSync(fp) ? fs.readFileSync(fp, 'utf8') : null; } catch (e) { return null; }
+}
+function writeLocalRaw(key, raw) {
+  const fp = filePath(key);
+  const tmp = fp + '.tmp';
+  fs.writeFileSync(tmp, raw);
+  fs.renameSync(tmp, fp);
+}
+// Restores data from Supabase/Firebase BEFORE the bot starts. Call once at boot.
+function init(opts = {}) {
+  return storage.init({ keys: Object.keys(FILES), readLocalRaw, writeLocalRaw, onReplaced: opts.onReplaced });
+}
+
 function readCollection(key) {
   const fp = filePath(key);
   if (!fs.existsSync(fp)) return {};
@@ -65,7 +83,7 @@ async function writeCollection(key, data) {
     const tmp = fp + '.tmp';
     fs.writeFile(tmp, JSON.stringify(data, null, 2), (err) => {
       if (err) return reject(err);
-      fs.rename(tmp, fp, (err2) => err2 ? reject(err2) : resolve());
+      fs.rename(tmp, fp, (err2) => { if (err2) return reject(err2); storage.notifyWrite(key); resolve(); });
     });
   }));
   writeQueues[key] = next.catch(() => {}); // don't let one failure jam the queue forever
@@ -93,7 +111,7 @@ async function updateCollectionAtomic(key, mutator) {
       const tmp = fp + '.tmp';
       fs.writeFile(tmp, JSON.stringify(toSave, null, 2), (err) => {
         if (err) return reject(err);
-        fs.rename(tmp, fp, (err2) => err2 ? reject(err2) : resolve());
+        fs.rename(tmp, fp, (err2) => { if (err2) return reject(err2); storage.notifyWrite(key); resolve(); });
       });
     });
     resultHolder.value = result && result.__value !== undefined ? result.__value : result;
@@ -1108,6 +1126,10 @@ module.exports = {
   getAllStaff,
   addStaff,
   getStaff,
+  init,
+  flushStorage: storage.flush,
+  shutdownStorage: storage.shutdown,
+  getStorageStatus: storage.status,
   createFeature,
   getFeature,
   getAllFeatures,

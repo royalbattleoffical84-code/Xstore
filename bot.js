@@ -7,6 +7,18 @@ const { setupAdminPanel } = require('./adminPanel');
 const { setupStaffApply } = require('./staffApply');
 const { setupFeatures } = require('./features');
 const ui = require('./ui');
+
+// ---- Persistent storage: restore data from Supabase/Firebase BEFORE serving anything ----
+// (Render's disk is wiped on every deploy; see storage.js). Everything that reads
+// or writes data waits for this promise.
+const storageReady = fb.init({
+  // a newer deploy took over: stop polling Telegram so it can't write any more
+  onReplaced: async () => { try { bot.stop('replaced'); } catch (e) {} }
+});
+storageReady.catch((err) => {
+  console.error('❌ Storage restore failed — refusing to start on empty data (Render will retry):', err && err.message);
+  process.exit(1);
+});
 const { setupMiniApp } = require('./miniapp-api');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -1917,6 +1929,7 @@ async function replacePaymentMessage(order, text) {
 // check all pending ZapUPI orders from the last hour and process any that
 // have completed. This is the reliable confirmation path.
 setInterval(async () => {
+  await storageReady;
   try {
     const cutoff = Date.now() - 60 * 60 * 1000; // only check orders from the last hour
     const pending = await fb.getPendingOrdersByMethod('fampay', cutoff);
@@ -2163,14 +2176,17 @@ async function processNewProductNotifications() {
 }
 
 setInterval(async () => {
+  await storageReady;
   try { await processBroadcastQueue(); } catch (err) { console.error('Broadcast queue error:', err); }
 }, 5000);
 
 setInterval(async () => {
+  await storageReady;
   try { await processDmQueue(); } catch (err) { console.error('DM queue error:', err); }
 }, 5000);
 
 setInterval(async () => {
+  await storageReady;
   try { await processNewProductNotifications(); } catch (err) { console.error('Product notification error:', err); }
 }, 10000);
 
@@ -2186,7 +2202,8 @@ bot.action('closepopup', async (ctx) => {
 setupMiniApp(app, bot, fb, fampay, { checkAndProcessOrder, checkAndAlertLowStock });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`));
+// Open the port only after data is restored, so nothing is served from empty data
+storageReady.then(() => app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`))).catch(() => {});
 
 // ============ GLOBAL ERROR HANDLER ============
 // Without this, any unhandled error in a handler (bad data, network blip,
@@ -2225,7 +2242,27 @@ function launchBot(attempt = 1) {
       process.exit(1);
     });
 }
-launchBot();
+storageReady.then(() => launchBot()).catch(() => {});
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Tell the owner(s) loudly if data is NOT being saved to an external database
+storageReady.then(async (st) => {
+  if (st && st.enabled) return;
+  const owners = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  for (const o of owners) {
+    try {
+      await bot.telegram.sendMessage(o, '⚠️ *Storage warning*\n\nExternal database set nahi hai, isliye Render par har deploy/restart pe *saara data (products, users, wallets) reset ho jayega*.\n\nRender → Environment mein `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (ya `FIREBASE_DB_URL`) daalo.', { parse_mode: 'Markdown' });
+    } catch (e) {}
+  }
+}).catch(() => {});
+
+// On deploy/stop: push the last changes to the database BEFORE exiting
+let shuttingDown = false;
+async function gracefulExit(sig) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try { bot.stop(sig); } catch (e) {}
+  try { await Promise.race([fb.shutdownStorage(), new Promise(r => setTimeout(r, 12000))]); } catch (e) {}
+  process.exit(0);
+}
+process.once('SIGINT', () => gracefulExit('SIGINT'));
+process.once('SIGTERM', () => gracefulExit('SIGTERM'));
