@@ -7,6 +7,7 @@
 
 const { Markup } = require('telegraf');
 const ui = require('./ui');
+const fampay = require('./fampay');
 
 function setupAdminPanel(bot, fb, mdEscape) {
   const adminState = {}; // { telegramId: { step, data } } — separate from user-facing userState
@@ -1229,10 +1230,21 @@ function setupAdminPanel(bot, fb, mdEscape) {
   async function sendPaymentSettingsMenu(ctx) {
     const s = await fb.getPaymentSettings();
     const maskedKey = s.apiKey ? s.apiKey.slice(0, 12) + '...' + s.apiKey.slice(-4) : 'not set';
-    const text = `💳 *Payment Settings (FamPay)*\n\n🔑 API Key: \`${maskedKey}\`\n🌐 Base URL: ${mdEscape(s.baseUrl)}\n💰 UPI ID: \`${s.upiId || 'not set'}\`\n📜 T&C: ${s.termsAndConditions ? 'set' : 'not set'}`;
+    const gw = String(s.gateway || process.env.PAYMENT_GATEWAY || 'zapupi').toLowerCase();
+    const pxUrl = s.payxUrl || process.env.PAYX_URL || '';
+    const pxKey = s.payxKey || process.env.PAYX_API_KEY || '';
+    const maskedPx = pxKey ? pxKey.slice(0, 8) + '...' + pxKey.slice(-4) : 'not set';
+    const cfgOk = s.payxCfg && s.payxCfg.statusPath;
+    const text = `${ui.banner('💳 PAYMENT SETTINGS', '✦ GATEWAY ✦')}\n\n` +
+      `🟢 *Active gateway: ${gw === 'payx' ? 'PayX' : 'ZapUPI'}*\n\n` +
+      `*PayX*\n🌐 URL: ${pxUrl ? mdEscape(pxUrl) : 'not set'}\n🔑 Key: \`${maskedPx}\`\n🔎 Connection: ${cfgOk ? `✅ verified (${mdEscape(s.payxCfg.createPath)})` : '⚠️ not tested yet'}\n\n` +
+      `*ZapUPI*\n🔑 API Key: \`${maskedKey}\`\n🌐 Base URL: ${mdEscape(s.baseUrl)}\n💰 UPI ID: \`${s.upiId || 'not set'}\`\n📜 T&C: ${s.termsAndConditions ? 'set' : 'not set'}`;
 
     const buttons = Markup.inlineKeyboard([
-      [Markup.button.callback('🔑 Edit API Key', 'admin_editfamkey')],
+      [Markup.button.callback('🧪 Test & Activate PayX', 'admin_payxtest')],
+      [Markup.button.callback('🔗 PayX URL', 'admin_payxurl'), Markup.button.callback('🔑 PayX Key', 'admin_payxkey')],
+      ...(gw === 'payx' ? [[Markup.button.callback('↩️ Switch back to ZapUPI', 'admin_gwzap')]] : []),
+      [Markup.button.callback('🔑 Edit ZapUPI API Key', 'admin_editfamkey')],
       [Markup.button.callback('🌐 Edit Base URL', 'admin_editfamurl')],
       [Markup.button.callback('💰 Edit UPI ID', 'admin_editfamupi')],
       [Markup.button.callback('📜 Edit Terms & Conditions', 'admin_editfamtc')],
@@ -1242,6 +1254,46 @@ function setupAdminPanel(bot, fb, mdEscape) {
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...buttons }); }
     catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...buttons }); }
   }
+
+  // ---- PayX gateway ----
+  bot.action('admin_payxurl', async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'awaiting_payx_url' };
+    await ctx.reply('🔗 PayX backend ka URL bhejo (jaise https://my-getway-xxxx.onrender.com):');
+  });
+  bot.action('admin_payxkey', async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'awaiting_payx_key' };
+    await ctx.reply('🔑 PayX API key bhejo (px_live_...). Save hote hi aapka message delete kar diya jayega.');
+  });
+  bot.action('admin_gwzap', async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await fb.updatePaymentSettings({ gateway: 'zapupi' });
+    await ctx.answerCbQuery('✅ ZapUPI active');
+    await sendPaymentSettingsMenu(ctx);
+  });
+  // Detects the right endpoints with a ₹1 test order, saves them and switches the bot to PayX
+  bot.action('admin_payxtest', async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery('Test chal raha hai...');
+    const wait = await ctx.reply('🧪 PayX connection test ho raha hai (Render server soya ho to 30-40 sec lag sakte hain)...');
+    const s = await fb.getPaymentSettings();
+    let res;
+    try { res = await fampay.discoverPayx(s); } catch (e) { res = { ok: false, notes: [e.message] }; }
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, wait.message_id); } catch (e) {}
+    if (!res.ok) {
+      await ctx.reply(`❌ PayX connect nahi hua\n\n${(res.notes || []).map(n => '• ' + n).join('\n')}\n\nZapUPI abhi bhi active hai, kuch nahi bigda.`);
+      return;
+    }
+    await fb.updatePaymentSettings({ payxCfg: res.cfg, gateway: 'payx' });
+    const sm = res.sample || {};
+    await ctx.reply(
+      `✅ PayX connect ho gaya aur ACTIVE hai!\n\n📍 Create: ${res.cfg.createPath}\n🔐 Auth: ${res.cfg.authMode}\n📊 Status: ${res.cfg.statusMethod} ${res.cfg.statusPath}\n🧾 Test order: ${sm.id || '-'} · amount ${sm.amount !== null && sm.amount !== undefined ? '₹' + sm.amount : '?'}\n${sm.url ? '🔗 ' + sm.url : ''}\n\n⚠️ Test order ₹1 ka tha — amount upar ₹1 dikhe to sahi hai (agar 100 ya 0.01 dikhe to bata dena).`,
+      { disable_web_page_preview: true });
+    await sendPaymentSettingsMenu(ctx);
+  });
 
   bot.action('admin_editfamkey', async (ctx) => {
     if (!(await isOwner(ctx))) return;
@@ -1852,6 +1904,25 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
 
     // ---- Payment Settings (FamPay) ----
+    if (state.step === 'awaiting_payx_url') {
+      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
+      if (!/^https?:\/\/[^\s]+$/i.test(text)) { await ctx.reply('⚠️ Sahi URL bhejo (https://...).'); return true; }
+      await fb.updatePaymentSettings({ payxUrl: text.replace(/\/+$/, ''), payxCfg: null });
+      delete adminState[ctx.from.id];
+      await ctx.reply('✅ PayX URL save ho gaya. Ab "🧪 Test & Activate PayX" dabao.');
+      await sendPaymentSettingsMenu(ctx);
+      return true;
+    }
+    if (state.step === 'awaiting_payx_key') {
+      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
+      if (text.length < 10 || /\s/.test(text)) { await ctx.reply('⚠️ Sahi API key bhejo (px_live_...).'); return true; }
+      await fb.updatePaymentSettings({ payxKey: text, payxCfg: null });
+      try { await ctx.deleteMessage(); } catch (e) {}   // don't leave the key sitting in the chat
+      delete adminState[ctx.from.id];
+      await ctx.reply('✅ PayX key save ho gayi (aapka message delete kar diya). Ab "🧪 Test & Activate PayX" dabao.');
+      await sendPaymentSettingsMenu(ctx);
+      return true;
+    }
     if (state.step === 'awaiting_fam_apikey') {
       await fb.updatePaymentSettings({ apiKey: text });
       delete adminState[ctx.from.id];
