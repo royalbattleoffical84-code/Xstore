@@ -8,7 +8,8 @@
 //
 // Pick ONE (set the env vars on Render):
 //   Supabase      SUPABASE_URL  +  SUPABASE_SERVICE_KEY   (service_role key)
-//   Firebase RTDB FIREBASE_DB_URL  (+ FIREBASE_DB_SECRET)
+//   Firebase RTDB FIREBASE_DB_URL  +  FIREBASE_SERVICE_ACCOUNT (service-account JSON, recommended)
+//                                 or FIREBASE_DB_SECRET (legacy database secret)
 // Nothing set => data stays local only (and a warning is shown).
 //
 // Safety design:
@@ -32,20 +33,104 @@ const CFG = {
   initRetries: num(process.env.STORAGE_INIT_RETRIES, 6),
   initRetryDelayMs: num(process.env.STORAGE_INIT_RETRY_DELAY_MS, 3000)
 };
-const TABLE = 'bot_kv';
+const TABLE = 'bot_kv';   // Supabase table name
+// Firebase: data lives under this node. Make it a long RANDOM string (FIREBASE_DB_PATH) when you
+// connect without a secret/service account — see the rules in the setup notes.
+const FB_NODE = (process.env.FIREBASE_DB_PATH || 'bot_kv').trim().replace(/^\/+|\/+$/g, '');
 const ME = crypto.randomBytes(6).toString('hex');
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ---------------- Firebase service-account login (no extra npm package) ----------------
+function loadServiceAccount(raw) {
+  if (!raw || !String(raw).trim()) return null;
+  let txt = String(raw).trim();
+  try { return validateSA(JSON.parse(txt)); } catch (e) { /* maybe base64 */ }
+  try { return validateSA(JSON.parse(Buffer.from(txt, 'base64').toString('utf8'))); } catch (e) {}
+  console.error('⚠️ [storage] FIREBASE_SERVICE_ACCOUNT is not valid JSON (paste the whole downloaded .json file content).');
+  return null;
+}
+function validateSA(o) {
+  if (!o || !o.client_email || !o.private_key) throw new Error('bad service account');
+  return o;
+}
+const b64u = (x) => Buffer.from(typeof x === 'string' ? x : JSON.stringify(x)).toString('base64url');
+async function fetchAccessToken(sa) {
+  const now = Math.floor(Date.now() / 1000);
+  const tokenUri = sa.token_uri || 'https://oauth2.googleapis.com/token';
+  const unsigned = b64u({ alg: 'RS256', typ: 'JWT' }) + '.' + b64u({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
+    aud: tokenUri, iat: now, exp: now + 3600
+  });
+  const sig = crypto.createSign('RSA-SHA256').update(unsigned).sign(sa.private_key, 'base64url');
+  const body = 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + encodeURIComponent(unsigned + '.' + sig);
+  const r = await axios.post(tokenUri, body, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 20000 });
+  return { token: r.data.access_token, exp: Date.now() + (r.data.expires_in || 3600) * 1000 };
+}
+
+// ---- Firebase auth: service account (recommended) or legacy database secret ----
+const b64url = (x) => Buffer.from(x).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+function loadServiceAccount() {
+  let raw = process.env.FIREBASE_SERVICE_ACCOUNT || '';
+  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_B64 || '';
+  try {
+    if (!raw && b64) raw = Buffer.from(b64.trim(), 'base64').toString('utf8');
+    if (!raw) return null;
+    const sa = JSON.parse(raw.trim());
+    if (!sa.client_email || !sa.private_key) throw new Error('missing client_email / private_key');
+    sa.private_key = String(sa.private_key).replace(/\\n/g, '\n');
+    return sa;
+  } catch (e) {
+    console.error('💾 [storage] FIREBASE_SERVICE_ACCOUNT is not valid JSON:', e.message);
+    return null;
+  }
+}
+
+function makeFirebaseAuth(secret) {
+  const sa = loadServiceAccount();
+  if (!sa) return async () => (secret ? { auth: secret } : {});
+  const tokenUri = sa.token_uri || 'https://oauth2.googleapis.com/token';
+  let token = null, exp = 0, inflight = null;
+  async function refresh() {
+    const now = Math.floor(Date.now() / 1000);
+    const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+    const claim = b64url(JSON.stringify({
+      iss: sa.client_email,
+      scope: 'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
+      aud: tokenUri, iat: now, exp: now + 3600
+    }));
+    const sig = crypto.createSign('RSA-SHA256').update(`${head}.${claim}`).sign(sa.private_key);
+    const body = new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: `${head}.${claim}.${b64url(sig)}`
+    }).toString();
+    const r = await axios.post(tokenUri, body, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 20000 });
+    token = r.data.access_token;
+    exp = Date.now() + (r.data.expires_in || 3600) * 1000;
+  }
+  return async () => {
+    if (!token || Date.now() > exp - 120000) {
+      inflight = inflight || refresh().finally(() => { inflight = null; });
+      await inflight;
+    }
+    return { access_token: token };
+  };
+}
 
 // ---------------- provider adapters ----------------
 function makeRemote() {
   const want = (process.env.STORAGE_PROVIDER || '').toLowerCase();
-  const sbUrl = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
-  const sbKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || '';
+  // accept "https://xxxx.supabase.co", ".../rest/v1" or ".../rest/v1/" — all work
+  const sbUrl = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '').replace(/\/rest\/v1$/i, '').replace(/\/+$/, '');
+  const sbKey = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || '').trim();
   const fbUrl = (process.env.FIREBASE_DB_URL || '').replace(/\/+$/, '');
   const fbSecret = process.env.FIREBASE_DB_SECRET || '';
 
   if ((want === 'supabase' || !want) && sbUrl && sbKey) {
-    const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json' };
+    // Legacy JWT keys (eyJ...) go in both headers; new-style keys (sb_secret_...) only in `apikey`.
+    const headers = { apikey: sbKey, 'Content-Type': 'application/json' };
+    if (sbKey.startsWith('eyJ')) headers.Authorization = `Bearer ${sbKey}`;
+    if (sbKey.startsWith('sb_publishable_')) console.warn('⚠️ [storage] SUPABASE key is a PUBLISHABLE (public) key — it cannot write to a protected table. Use the SECRET key (sb_secret_...) or the legacy service_role key.');
     return {
       name: 'Supabase',
       async get(key) {
@@ -62,17 +147,20 @@ function makeRemote() {
   }
 
   if ((want === 'firebase' || !want) && fbUrl) {
-    const params = fbSecret ? { auth: fbSecret } : {};
+    const auth = makeFirebaseAuth(fbSecret);
+    if (!fbSecret && !process.env.FIREBASE_SERVICE_ACCOUNT && !process.env.FIREBASE_SERVICE_ACCOUNT_B64 && FB_NODE === 'bot_kv') {
+      console.warn('⚠️ [storage] Firebase without a secret/service account and with the DEFAULT path "bot_kv" is guessable. Set FIREBASE_DB_PATH to a long random string and lock the rules to that path only.');
+    }
     return {
       name: 'Firebase RTDB',
       async get(key) {
-        const r = await axios.get(`${fbUrl}/${TABLE}/${key}.json`, { params, timeout: 20000 });
+        const r = await axios.get(`${fbUrl}/${FB_NODE}/${key}.json`, { params: await auth(), timeout: 20000 });
         return typeof r.data === 'string' ? r.data : null;
       },
       async set(key, value) {
         // store the JSON text as a JSON *string* so arrays/empty objects survive exactly
-        await axios.put(`${fbUrl}/${TABLE}/${key}.json`, JSON.stringify(value), {
-          params, headers: { 'Content-Type': 'application/json' }, timeout: 30000, maxBodyLength: Infinity
+        await axios.put(`${fbUrl}/${FB_NODE}/${key}.json`, JSON.stringify(value), {
+          params: await auth(), headers: { 'Content-Type': 'application/json' }, timeout: 30000, maxBodyLength: Infinity
         });
       }
     };

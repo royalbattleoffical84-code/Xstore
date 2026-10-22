@@ -6,6 +6,7 @@ const fampay = require('./fampay');
 const { setupAdminPanel } = require('./adminPanel');
 const { setupStaffApply } = require('./staffApply');
 const { setupFeatures } = require('./features');
+const { setupDevelopers } = require('./developers');
 const ui = require('./ui');
 
 // ---- Persistent storage: restore data from Supabase/Firebase BEFORE serving anything ----
@@ -257,6 +258,9 @@ bot.action('check_joined', async (ctx) => {
 // banned / not-joined users can't use it)
 const staffApply = setupStaffApply(bot, fb, userState, { mdEscape, sendMainMenu, sendMainMenuToUser, fampay, sendZapUpiPaymentLink });
 const features = setupFeatures(bot, fb, userState, adminPanel.adminState, { mdEscape, sendMainMenu, sendMainMenuToUser, fampay, sendZapUpiPaymentLink });
+const developers = setupDevelopers(bot, fb, adminPanel.adminState, { mdEscape });
+// First boot: default developer categories + the ready-made "Become a Developer" feature
+storageReady.then(() => features.seedDefaults()).catch((e) => console.error('seedDefaults failed:', e && e.message));
 
 // ============ START / REGISTER ============
 
@@ -294,7 +298,8 @@ async function getMenuFlags(userId) {
   }
   // Owner-built custom features (Admin Panel -> Features) show as menu buttons
   const features = isOwner ? [] : (await fb.getEnabledFeatures()).slice(0, 8).map(f => ({ id: f.id, title: f.title }));
-  return { isOwner, isStaff, pendingStaff, features };
+  const meta = await fb.getFeatureMeta();
+  return { isOwner, isStaff, pendingStaff, features, hire: meta.hireEnabled !== false };
 }
 
 async function sendMainMenu(ctx) {
@@ -333,6 +338,7 @@ const DEFAULT_MENU_LABELS = {
   leaderboard: '🏆 Leaderboard',
   becomestaff: '🧑‍💼 Become a Staff',
   adminpanel: '🛠 Admin Panel',
+  hire: '💼 Hire a Developer',
   staffpanel: '🛠 Staff Panel'
 };
 
@@ -361,6 +367,7 @@ function mainMenu(settings, flags = {}) {
   }
 
   (flags.features || []).forEach(f => rows.push([Markup.button.callback(f.title, `feat_${f.id}`)]));
+  if (flags.hire) rows.push([Markup.button.callback(labels.hire, 'menu_hire')]);
 
   // Admin-configured custom link buttons on the main menu (e.g. "Join Community").
   // Supports multiple — each one is its own row.
@@ -404,8 +411,9 @@ async function renderProfile(ctx) {
   const orderCount = Object.keys(orders).length;
 
   const vipLine = isVip ? `👑 VIP Active — ${vipDays} days left` : '👤 Free User';
+  const badgeLine = (user.badges && user.badges.length) ? `\n🏅 Badges: ${user.badges.map(x => mdEscape(x)).join(', ')}` : '';
 
-  const msg = `👤 *My Profile*\n\n✨ Name: ${mdEscape(user.name)}\n🔖 Username: ${user.username ? '@' + mdEscape(user.username) : '-'}\n🆔 Telegram ID: \`${telegramId}\`\n\n${vipLine}\n💰 Wallet: ₹${balance}\n📦 Total Orders: ${orderCount}\n🔗 Referral Code: \`${user.referralCode}\``;
+  const msg = `👤 *My Profile*\n\n✨ Name: ${mdEscape(user.name)}\n🔖 Username: ${user.username ? '@' + mdEscape(user.username) : '-'}\n🆔 Telegram ID: \`${telegramId}\`\n\n${vipLine}${badgeLine}\n💰 Wallet: ₹${balance}\n📦 Total Orders: ${orderCount}\n🔗 Referral Code: \`${user.referralCode}\``;
 
   await smartReply(ctx, msg, backButton(ctx));
 }
@@ -1594,6 +1602,7 @@ bot.on('text', async (ctx) => {
 
   // Custom features: owner's create-wizard + users' application answers
   if (await features.handleText(ctx)) return;
+  if (await developers.handleText(ctx)) return;
 
   const state = userState[ctx.from.id];
   if (!state) return; // ignore, no active flow
@@ -2242,7 +2251,7 @@ function launchBot(attempt = 1) {
       process.exit(1);
     });
 }
-storageReady.then(() => launchBot()).catch(() => {});
+storageReady.then(async () => { try { await features.seedDefaults(); } catch (e) { console.error('seedDefaults failed:', e.message); } launchBot(); }).catch(() => {});
 
 // Tell the owner(s) loudly if data is NOT being saved to an external database
 storageReady.then(async (st) => {

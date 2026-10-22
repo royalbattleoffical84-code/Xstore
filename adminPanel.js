@@ -143,7 +143,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
       rows.push([Markup.button.callback('👑 Pro Plan', 'admin_proplan'), Markup.button.callback('🎯 Check-in', 'admin_checkin')]);
       rows.push([Markup.button.callback('📊 Sales Report', 'admin_report'), Markup.button.callback('🏆 Leaderboard', 'admin_leaderboard')]);
       rows.push([Markup.button.callback('🧑‍💼 Staff', 'admin_staff'), Markup.button.callback('🧩 Features', 'admin_features')]);
-      rows.push([Markup.button.callback('💾 Backup Data', 'admin_backup')]);
+      rows.push([Markup.button.callback('👨‍💻 Developers', 'admin_developers'), Markup.button.callback('💾 Backup Data', 'admin_backup')]);
     } else {
       const perms = await fb.getStaffPermissions(ctx.from.id);
       const open = (perm) => perms.includes(perm) && !(perm === 'gift' && !cfg.giftEnabled);

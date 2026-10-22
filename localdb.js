@@ -37,6 +37,9 @@ const FILES = {
   staffSettings: 'staffSettings.json',
   features: 'features.json',
   featureRequests: 'featureRequests.json',
+  featureMeta: 'featureMeta.json',
+  developers: 'developers.json',
+  devCategories: 'devCategories.json',
   paymentSettings: 'paymentSettings.json'
 };
 
@@ -971,7 +974,13 @@ async function createFeatureRequest(data) {
   await updateCollectionAtomic('featureRequests', (all) => { all[id] = r; });
   return r;
 }
+async function getFeatureRequests(featureId) {
+  return Object.values(readCollection('featureRequests')).filter(r => r.featureId === featureId);
+}
 async function getFeatureRequest(id) { return readCollection('featureRequests')[id] || null; }
+async function getAllFeatureRequests(featureId) {
+  return Object.values(readCollection('featureRequests')).filter(r => !featureId || r.featureId === featureId);
+}
 async function getPendingFeatureRequests(featureId) {
   return Object.values(readCollection('featureRequests'))
     .filter(r => r.status === 'pending' && (!featureId || r.featureId === featureId))
@@ -989,6 +998,68 @@ async function decideFeatureRequest(id, status, decidedBy) {
     if (!r || r.status !== 'pending') return { __value: null };
     all[id] = { ...r, status, decidedBy: String(decidedBy), decidedAt: Date.now() };
     return { __value: all[id] };
+  });
+}
+
+// ---- Hire-a-Developer directory ----
+async function getFeatureMeta() { return readCollection('featureMeta'); }
+async function updateFeatureMeta(patch) {
+  await updateCollectionAtomic('featureMeta', (m) => { Object.assign(m, patch); });
+  return readCollection('featureMeta');
+}
+
+async function getDevCategories() {
+  return Object.values(readCollection('devCategories')).sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+async function createDevCategory(name) {
+  const id = generateId('dc_');
+  const all = readCollection('devCategories');
+  const order = Object.values(all).reduce((m, c) => Math.max(m, c.order || 0), 0) + 1;
+  const cat = { id, name, active: true, order, createdAt: Date.now() };
+  await updateCollectionAtomic('devCategories', (c) => { c[id] = cat; });
+  return cat;
+}
+async function updateDevCategory(id, patch) {
+  return updateCollectionAtomic('devCategories', (c) => {
+    if (!c[id]) return { __value: null };
+    c[id] = { ...c[id], ...patch };
+    return { __value: c[id] };
+  });
+}
+async function deleteDevCategory(id) {
+  await updateCollectionAtomic('devCategories', (c) => { delete c[id]; });
+}
+
+async function getDevelopers() {
+  return Object.values(readCollection('developers')).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+async function getDeveloper(userId) { return readCollection('developers')[String(userId)] || null; }
+async function upsertDeveloper(d) {
+  const id = String(d.userId);
+  await updateCollectionAtomic('developers', (all) => {
+    all[id] = { active: true, createdAt: Date.now(), ...(all[id] || {}), ...d, userId: id };
+  });
+  return getDeveloper(id);
+}
+async function updateDeveloper(userId, patch) {
+  return updateCollectionAtomic('developers', (all) => {
+    const id = String(userId);
+    if (!all[id]) return { __value: null };
+    all[id] = { ...all[id], ...patch };
+    return { __value: all[id] };
+  });
+}
+async function removeDeveloper(userId) {
+  await updateCollectionAtomic('developers', (all) => { delete all[String(userId)]; });
+}
+
+// ---- profile badges (e.g. "Developer") ----
+async function addUserBadge(userId, label) {
+  await updateCollectionAtomic('users', (users) => {
+    const u = users[String(userId)];
+    if (!u) return;
+    u.badges = Array.isArray(u.badges) ? u.badges : [];
+    if (!u.badges.includes(label)) u.badges.push(label);
   });
 }
 
@@ -1126,6 +1197,18 @@ module.exports = {
   getAllStaff,
   addStaff,
   getStaff,
+  getFeatureMeta,
+  updateFeatureMeta,
+  getDevCategories,
+  createDevCategory,
+  updateDevCategory,
+  deleteDevCategory,
+  getDevelopers,
+  getDeveloper,
+  upsertDeveloper,
+  updateDeveloper,
+  removeDeveloper,
+  addUserBadge,
   init,
   flushStorage: storage.flush,
   shutdownStorage: storage.shutdown,
@@ -1138,6 +1221,8 @@ module.exports = {
   deleteFeature,
   createFeatureRequest,
   getFeatureRequest,
+  getAllFeatureRequests,
+  getFeatureRequests,
   getPendingFeatureRequests,
   getLatestFeatureRequestForUser,
   decideFeatureRequest,

@@ -699,7 +699,7 @@ function viewMe() {
   const bonus = r.bonusType === 'percent' ? `${r.bonusAmount}%` : rs(r.bonusAmount);
   let h = topbar() + `<div class="sec" style="padding-top:12px"><div class="box"><div class="row"><div class="av" style="${phStyle(u.id)}">${esc((u.name||'U').charAt(0).toUpperCase())}</div>
     <div><div style="font-family:var(--display);font-weight:800;font-size:19px">${esc(u.name)}</div><div class="muted">${u.username ? '@' + esc(u.username) : 'ID ' + esc(u.id)}</div>
-    ${u.isVip ? `<span class="badge ok" style="margin-top:4px">${esc(t('vip_left', { n: u.vipDaysLeft }))}</span>` : ''}</div></div>
+    ${u.isVip ? `<span class="badge ok" style="margin-top:4px">${esc(t('vip_left', { n: u.vipDaysLeft }))}</span>` : ''}${(u.badges || []).map(x => ` <span class="badge wait" style="margin-top:4px">🏅 ${esc(x)}</span>`).join('')}</div></div>
     <div class="kv"><div><b>${u.totalOrders}</b><span>${esc(t('st_orders'))}</span></div><div><b>${rs(u.totalSpent)}</b><span>${esc(t('st_spent'))}</span></div><div><b>${u.referredCount}</b><span>${esc(t('st_refs'))}</span></div></div></div></div>`;
   if (st.pro && st.pro.active) {
     h += `<button class="pro" data-act="pro">${ico('crown')}<div><b>${esc(u.isVip ? t('extend_vip') : t('vip_plan'))}</b><span>${esc(t('pro_line', { price: rs(st.pro.price), days: st.pro.durationDays }))}</span></div></button>`;

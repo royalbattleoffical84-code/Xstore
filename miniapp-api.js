@@ -200,6 +200,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       username: analytics.username || '',
       balance: analytics.walletBalance || 0,
       isVip,
+      badges: (await fb.getUser(uid) || {}).badges || [],
       vipDaysLeft: isVip ? await fb.getVipDaysLeft(uid) : 0,
       referralCode: analytics.referralCode || '',
       referralLink: botUsername && analytics.referralCode ? `https://t.me/${botUsername}?start=${analytics.referralCode}` : '',

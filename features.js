@@ -27,7 +27,40 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     if (!r || r.type === 'none' || !r.type) return 'Koi reward nahi (sirf message)';
     if (r.type === 'wallet') return `₹${r.amount} wallet credit`;
     if (r.type === 'vip') return `${r.amount} din VIP`;
+    if (r.type === 'staff') return 'Staff Panel access';
     return '-';
+  };
+
+  // Ready-made starting points (everything can be edited afterwards from the Admin Panel)
+  const TEMPLATES = {
+    developer: {
+      label: '🧑‍💻 Become a Developer',
+      title: '🧑‍💻 Become a Developer',
+      intro: 'Join our developer program! Tell us about your skills and what you want to build. Selected developers get special access.',
+      questions: ['What name should we show in the "Hire a Developer" list?', 'What are your main skills? (languages / tools)', 'How many years of experience do you have?', 'Share your portfolio / GitHub link (or write "none")', 'What would you like to build or sell here?'],
+      askContact: true
+    },
+    reseller: {
+      label: '🤝 Become a Reseller',
+      title: '🤝 Become a Reseller',
+      intro: 'Resell our products and earn. Tell us a little about how you will sell.',
+      questions: ['Where will you sell? (Telegram group / Instagram / etc.)', 'How many customers can you reach?'],
+      askContact: true
+    },
+    tester: {
+      label: '🧪 Become a Tester',
+      title: '🧪 Become a Tester',
+      intro: 'Help us test new products before everyone else.',
+      questions: ['Which devices do you use?', 'Why do you want to be a tester?'],
+      askContact: false
+    },
+    designer: {
+      label: '🎨 Become a Designer',
+      title: '🎨 Become a Designer',
+      intro: 'Share your design work and join our creative team.',
+      questions: ['Which tools do you design with?', 'Link to your best work (or write "none")'],
+      askContact: false
+    }
   };
 
   // =====================================================================
@@ -39,14 +72,19 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     if (!f || !f.enabled) return ctx.answerCbQuery('Yeh feature abhi available nahi hai.', { show_alert: true });
     if (fb.isAdmin(uid)) return ctx.answerCbQuery('Aap owner ho — yeh users ke liye hai.', { show_alert: true });
 
+    // "Become a Developer": already listed -> nothing to do; no categories -> can't apply yet
+    if (isDev(f) && await fb.getDeveloper(uid)) return ctx.answerCbQuery('✅ Aap pehle se Developer ho. "Hire a Developer" mein aapka profile dikh raha hai.', { show_alert: true });
     const last = await fb.getLatestFeatureRequestForUser(uid, f.id);
     if (last && last.status === 'pending') return ctx.answerCbQuery('⏳ Aapki request owner ke paas pending hai.', { show_alert: true });
-    if (last && last.status === 'approved') return ctx.answerCbQuery('✅ Aapki request pehle hi approve ho chuki hai.', { show_alert: true });
+    if (last && last.status === 'approved' && !isDev(f)) return ctx.answerCbQuery('✅ Aapki request pehle hi approve ho chuki hai.', { show_alert: true });
     if (last && last.status === 'rejected' && last.decidedAt && Date.now() - last.decidedAt < COOLDOWN_MS) {
       const hrs = Math.ceil((COOLDOWN_MS - (Date.now() - last.decidedAt)) / 3600000);
       return ctx.answerCbQuery(`Pichli request reject hui thi. ${hrs} ghante baad dobara try karo.`, { show_alert: true });
     }
 
+    if (isDev(f) && (await fb.getDevCategories()).filter(c => c.active).length === 0) {
+      return ctx.answerCbQuery('Abhi developer categories set nahi hain. Owner se contact karo.', { show_alert: true });
+    }
     await ctx.answerCbQuery();
     const data = { featureId: f.id, answers: [], idx: 0 };
     const feeLine = f.fee > 0 ? `💰 Fee: *₹${f.fee}*${f.refundOnReject ? ' _(reject hone par refund)_' : ''}\n\n` : '';
@@ -57,7 +95,37 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
       return ctx.reply(`${head}Step 1 — Neeche wale button se apna *contact share* karo.`, { parse_mode: 'Markdown', ...contactKb });
     }
     userState[uid] = { step: 'feat_q', data };
-    return askQuestion(ctx, f, data, head);
+    return afterContact(ctx, f, userState[uid], head);
+  });
+
+  // ---- Hire-a-Developer: "Become a Developer" applicants pick a category first ----
+  const isDev = (f) => !!(f && (f.isDeveloper || f.templateKey === 'developer'));
+
+  async function afterContact(ctx, f, st, head = '') {
+    if (isDev(f) && !st.data.categoryId) {
+      st.step = 'feat_cat';
+      const cats = (await fb.getDevCategories()).filter(c => c.active);
+      const rows = cats.map(c => [Markup.button.callback(c.name, `featcat_${c.id}`)]);
+      rows.push([Markup.button.callback('❌ Cancel', 'featpay_cancel')]);
+      return ctx.reply(`${head}📂 Aap kis category ke developer ho? Chuno:`, Markup.inlineKeyboard(rows));
+    }
+    st.step = 'feat_q';
+    if (st.data.idx < f.questions.length) return askQuestion(ctx, f, st.data, head);
+    return finishOrAsk(ctx, f, st);
+  }
+
+  bot.action(/^featcat_(.+)$/, async (ctx) => {
+    const uid = String(ctx.from.id);
+    const st = userState[uid];
+    if (!st || st.step !== 'feat_cat') return ctx.answerCbQuery('Session expire ho gaya — feature button dobara dabao.', { show_alert: true });
+    const f = await fb.getFeature(st.data.featureId);
+    const cat = (await fb.getDevCategories()).find(c => c.id === ctx.match[1] && c.active);
+    if (!f || !cat) return ctx.answerCbQuery('Category available nahi hai.', { show_alert: true });
+    st.data.categoryId = cat.id; st.data.categoryName = cat.name;
+    await ctx.answerCbQuery('✅');
+    await ctx.reply(`📂 Category: *${mdEscape(cat.name)}*`, { parse_mode: 'Markdown' });
+    st.step = 'feat_q';
+    return finishOrAsk(ctx, f, st);
   });
 
   async function askQuestion(ctx, f, data, head = '') {
@@ -77,9 +145,8 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     const f = await fb.getFeature(st.data.featureId);
     if (!f) { delete userState[uid]; return ctx.reply('Feature nahi mila.', Markup.removeKeyboard()); }
     st.data.phone = c.phone_number;
-    st.step = 'feat_q';
     await ctx.reply('✅ Contact mil gaya.', Markup.removeKeyboard());
-    return finishOrAsk(ctx, f, st);
+    return afterContact(ctx, f, st);
   });
 
   // after contact / each answer: next question, or on to payment/submit
@@ -124,8 +191,8 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
       await ctx.reply('📱 Text nahi — neeche wale *Share My Contact* button par tap karo.', { parse_mode: 'Markdown', ...contactKb });
       return true;
     }
-    if (st.step === 'feat_pay') {
-      await ctx.reply('👆 Upar ke buttons se payment method chuno.');
+    if (st.step === 'feat_pay' || st.step === 'feat_cat') {
+      await ctx.reply('👆 Upar ke buttons se chuno.');
       return true;
     }
     if (st.step === 'feat_q') {
@@ -204,6 +271,8 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
       tgName: data.tgName || (u && u.name) || '',
       phone: data.phone || '',
       answers: data.answers || [],
+      categoryId: data.categoryId || null,
+      categoryName: data.categoryName || null,
       ...(fee || {})
     });
     try {
@@ -231,7 +300,7 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
   function requestCard(req) {
     const feeInfo = req.feePaid ? `Fee paid: ₹${req.feePaid} (${req.feeMethod || 'wallet'})` : null;
     return {
-      text: ui.featureRequestCard(req, feeInfo),
+      text: ui.featureRequestCard({ ...req, answers: [...(req.categoryName ? [{ q: 'Category', a: req.categoryName }] : []), ...(req.answers || [])] }, feeInfo),
       kb: Markup.inlineKeyboard([[
         Markup.button.callback('✅ Approve', `featreq_approve_${req.id}`),
         Markup.button.callback('❌ Reject', `featreq_reject_${req.id}`)
@@ -244,6 +313,27 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
       try { await bot.telegram.sendMessage(o, text, { parse_mode: 'Markdown', ...kb }); }
       catch (e) { console.error('Feature request notify failed for owner', o, e.message); }
     }
+  }
+
+  // Adds an approved applicant to the public "Hire a Developer" list
+  async function registerDeveloper(req) {
+    const u = await fb.getUser(req.userId);
+    const answers = req.answers || [];
+    // the answer to the "name" question becomes the display name (falls back to the Telegram name)
+    const nameAns = answers.find(x => /\bname\b|naam/i.test(x.q || ''));
+    const name = (nameAns && nameAns.a.length <= 40 && !/^https?:/i.test(nameAns.a) ? nameAns.a : null) || req.tgName || (u && u.name) || 'Developer';
+    const link = (answers.map(a => a.a).join(' ').match(/https?:\/\/\S+/) || [])[0] || '';
+    await fb.upsertDeveloper({
+      userId: req.userId,
+      name,
+      username: req.username || (u && u.username) || '',
+      category: req.categoryId || null,
+      bio: answers.filter(x => x !== nameAns).map(x => `${x.q}: ${x.a}`).join('\n').slice(0, 600),
+      portfolio: link,
+      phone: req.phone || '',
+      active: true,
+      featureRequestId: req.id
+    });
   }
 
   bot.action(/^featreq_approve_(.+)$/, async (ctx) => {
@@ -261,6 +351,18 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     } else if (r && r.type === 'vip' && r.amount > 0) {
       await fb.activateProPlan(req.userId, r.amount);
       rewardLine = `👑 Reward: ${r.amount} din ka VIP activate ho gaya!`;
+    } else if (r && r.type === 'staff') {
+      if (!(await fb.getStaff(req.userId))) {
+        const cfgS = await fb.getStaffSettings();
+        await fb.addStaff(req.userId, cfgS.defaultPerms && cfgS.defaultPerms.length ? cfgS.defaultPerms : ['products'], { fullName: req.tgName, phone: req.phone, username: req.username });
+      }
+      rewardLine = '🛠 Aapko Staff Panel access mil gaya! Main menu mein *Staff Panel* button dekho.';
+    }
+
+    if (isDev(f)) {
+      await registerDeveloper(req);
+      await fb.addUserBadge(req.userId, 'Developer');
+      rewardLine += `${rewardLine ? '\n' : ''}💼 Aap ab "Hire a Developer" section mein listed ho! 🏅 Badge: Developer`;
     }
 
     await ctx.answerCbQuery('✅ Approved');
@@ -295,13 +397,15 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
   // =====================================================================
   async function sendFeaturesList(ctx) {
     const all = await fb.getAllFeatures();
-    let text = `${ui.banner('🧩 CUSTOM FEATURES', '✦ BUILD YOUR OWN ✦')}\n\nYahan se "Become a Staff" jaise naye features bana sakte ho — user se sawal poochho, fee lo, approve karke reward do.\n\n`;
-    if (!all.length) text += '_Abhi koi feature nahi hai._';
-    const rows = [[Markup.button.callback('➕ Create Feature', 'featadm_new')]];
+    let text = `${ui.banner('🧩 CUSTOM FEATURES', '✦ BUILD YOUR OWN ✦')}\n\n` +
+      'Yahan se "Become a Staff / Developer" jaise naye features bana sakte ho — sab kuch Admin Panel se, koi code nahi.\n' +
+      '❖ User se sawal poochho\n❖ Free ya Paid rakho (fee)\n❖ Approve karke reward do\n\n';
+    if (!all.length) text += '_Abhi koi feature nahi hai. "New Feature" dabao._';
+    const rows = [[Markup.button.callback('➕ New Feature', 'featadm_new')]];
     for (const f of all) {
       const pend = (await fb.getPendingFeatureRequests(f.id)).length;
-      text += `${f.enabled ? '🟢' : '🔴'} *${mdEscape(f.title)}* — ${f.fee > 0 ? '₹' + f.fee : 'free'}${pend ? ` · ⏳ ${pend}` : ''}\n`;
-      rows.push([Markup.button.callback(`${f.enabled ? '🟢' : '🔴'} ${f.title.slice(0, 30)}${pend ? ` (${pend})` : ''}`, `featadm_view_${f.id}`)]);
+      text += `${f.enabled ? '🟢' : '🔴'} *${mdEscape(f.title)}* — ${f.fee > 0 ? '💰 ₹' + f.fee : '🆓 Free'}${pend ? ` · ⏳ ${pend}` : ''}\n`;
+      rows.push([Markup.button.callback(`${f.enabled ? '🟢' : '🔴'} ${f.title.slice(0, 26)} · ${f.fee > 0 ? '₹' + f.fee : 'Free'}${pend ? ` (${pend})` : ''}`, `featadm_view_${f.id}`)]);
     }
     rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
@@ -318,17 +422,25 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
   async function sendFeatureView(ctx, id) {
     const f = await fb.getFeature(id);
     if (!f) return ctx.reply('Feature nahi mila.');
-    const pend = (await fb.getPendingFeatureRequests(id)).length;
+    const reqs = await fb.getFeatureRequests(id);
+    const pend = reqs.filter(r => r.status === 'pending').length;
+    const appr = reqs.filter(r => r.status === 'approved').length;
+    const rej = reqs.filter(r => r.status === 'rejected').length;
     const text = `${ui.banner('🧩 FEATURE', `✦ ${f.title} ✦`.slice(0, 40))}\n\n` +
-      `Status: *${f.enabled ? 'ON 🟢' : 'OFF 🔴'}*\n💰 Fee: *${f.fee > 0 ? '₹' + f.fee : 'Free'}*${f.fee > 0 ? `\n↩️ Refund on reject: *${f.refundOnReject ? 'Yes' : 'No'}*` : ''}\n` +
-      `📱 Contact maanga jata hai: *${f.askContact ? 'Yes' : 'No'}*\n🎁 Reward: *${mdEscape(rewardLabel(f.reward))}*\n⏳ Pending: *${pend}*\n\n` +
-      `📝 ${mdEscape(f.intro)}\n\n❓ *Questions:*\n${f.questions.map((q, i) => `${i + 1}. ${mdEscape(q)}`).join('\n') || '—'}`;
+      `Status: *${f.enabled ? 'ON 🟢' : 'OFF 🔴'}*\n` +
+      `${f.fee > 0 ? `💎 Type: *Paid — ₹${f.fee}*\n↩️ Refund on reject: *${f.refundOnReject ? 'Yes' : 'No'}*` : '🆓 Type: *Free*'}\n` +
+      `📱 Contact maanga jata hai: *${f.askContact ? 'Yes' : 'No'}*\n🎁 Reward: *${mdEscape(rewardLabel(f.reward))}*\n` +
+      `📊 Applications: ⏳ ${pend} · ✅ ${appr} · ❌ ${rej}\n\n` +
+      `📝 ${mdEscape(f.intro)}\n\n❓ *Questions (${f.questions.length}):*\n${f.questions.map((q, i) => `${i + 1}. ${mdEscape(q)}`).join('\n') || '—'}`;
     const rows = [
-      [Markup.button.callback(f.enabled ? '🔴 Turn OFF' : '🟢 Turn ON', `featadm_toggle_${id}`)],
-      [Markup.button.callback('✏️ Edit Title', `featadm_edittitle_${id}`), Markup.button.callback('💰 Edit Fee', `featadm_editfee_${id}`)],
-      ...(f.fee > 0 ? [[Markup.button.callback(`↩️ Refund on reject: ${f.refundOnReject ? 'ON' : 'OFF'}`, `featadm_refund_${id}`)]] : []),
-      [Markup.button.callback(`📥 Pending Requests (${pend})`, `featadm_reqs_${id}`)],
-      [Markup.button.callback('🗑 Delete Feature', `featadm_del_${id}`)],
+      [Markup.button.callback(f.enabled ? '🔴 Turn OFF' : '🟢 Turn ON', `featadm_toggle_${id}`),
+       Markup.button.callback(f.fee > 0 ? '🆓 Make FREE' : '💎 Make PAID', `featadm_paidfree_${id}`)],
+      [Markup.button.callback('✏️ Title', `featadm_edittitle_${id}`), Markup.button.callback('📝 Description', `featadm_intro_${id}`)],
+      [Markup.button.callback(`❓ Questions (${f.questions.length})`, `featadm_qs_${id}`), Markup.button.callback(`📱 Contact: ${f.askContact ? 'ON' : 'OFF'}`, `featadm_contact_${id}`)],
+      ...(f.fee > 0 ? [[Markup.button.callback('💰 Edit Fee', `featadm_editfee_${id}`), Markup.button.callback(`↩️ Refund: ${f.refundOnReject ? 'ON' : 'OFF'}`, `featadm_refund_${id}`)]] : []),
+      [Markup.button.callback('🎁 Reward', `featadm_rwedit_${id}`), Markup.button.callback('💬 Approval Message', `featadm_msg_${id}`)],
+      [Markup.button.callback(`📥 Pending (${pend})`, `featadm_reqs_${id}`), Markup.button.callback('📜 History', `featadm_hist_${id}`)],
+      [Markup.button.callback('👁 Preview', `featadm_preview_${id}`), Markup.button.callback('🗑 Delete', `featadm_del_${id}`)],
       [Markup.button.callback('⬅️ Back', 'admin_features')]
     ];
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
@@ -388,21 +500,182 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     await sendFeaturesList(ctx);
   });
 
-  // ---- create wizard ----
+  // ---- create: pick a template or build from scratch ----
   bot.action('featadm_new', async (ctx) => {
+    if (!isOwner(ctx)) return;
+    await ctx.answerCbQuery();
+    delete adminState[ctx.from.id];
+    const t = Object.entries(TEMPLATES).map(([k, v]) => Markup.button.callback(v.label, `featadm_tpl_${k}`));
+    await ctx.reply(`${ui.banner('🧩 NEW FEATURE', '✦ PICK A START ✦')}\n\nReady-made template chuno (baad mein sab edit kar sakte ho) ya *Blank* se apna khud ka feature banao:`, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([...[0, 2].map(i => t.slice(i, i + 2)).filter(r => r.length), [Markup.button.callback('✍️ Blank — fully custom', 'featadm_blank')], [Markup.button.callback('⬅️ Back', 'admin_features')]])
+    });
+  });
+
+  bot.action(/^featadm_tpl_(\w+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const t = TEMPLATES[ctx.match[1]];
+    if (!t) return ctx.answerCbQuery('Template nahi mila.');
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'featadm_tplpaid', data: { tpl: ctx.match[1] } };
+    await ctx.reply(`*${mdEscape(t.title)}* — yeh feature *Free* rakhna hai ya *Paid*?`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+      [Markup.button.callback('🆓 Free', 'featadm_tplfree'), Markup.button.callback('💎 Paid', 'featadm_tplpaid')]
+    ]) });
+  });
+
+  async function createFromTemplate(ctx, key, fee) {
+    const t = TEMPLATES[key];
+    const f = await fb.createFeature({
+      title: t.title, intro: t.intro, questions: t.questions.slice(), askContact: t.askContact,
+      fee, refundOnReject: fee > 0, reward: { type: 'none', amount: 0 }, approvedMessage: '', templateKey: key
+    });
+    delete adminState[ctx.from.id];
+    await ctx.reply(`✅ *${mdEscape(t.title)}* ban gaya aur home menu mein dikhne laga! Neeche se sab kuch edit kar sakte ho.`, { parse_mode: 'Markdown' });
+    await sendFeatureView(ctx, f.id);
+  }
+
+  bot.action('featadm_tplfree', async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'featadm_tplpaid') return ctx.answerCbQuery('Session expire.', { show_alert: true });
+    await ctx.answerCbQuery();
+    await createFromTemplate(ctx, st.data.tpl, 0);
+  });
+  bot.action('featadm_tplpaid', async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'featadm_tplpaid') return ctx.answerCbQuery('Session expire.', { show_alert: true });
+    await ctx.answerCbQuery();
+    st.step = 'featadm_tplfee';
+    await ctx.reply('💰 Application fee kitni rakhni hai? (₹ number)');
+  });
+
+  bot.action('featadm_blank', async (ctx) => {
     if (!isOwner(ctx)) return;
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'featadm_title', data: { questions: [] } };
     await ctx.reply(`${ui.banner('🧩 NEW FEATURE', '✦ STEP 1 ✦')}\n\nHome menu mein *button ka naam* kya ho? (emoji ke saath)\nJaise: 🤝 Become a Reseller`, { parse_mode: 'Markdown' });
   });
 
-  bot.action(/^featadm_rw_(none|wallet|vip)$/, async (ctx) => {
+  // ---- quick edits ----
+  bot.action(/^featadm_paidfree_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const f = await fb.getFeature(ctx.match[1]); if (!f) return ctx.answerCbQuery('Not found.');
+    if (f.fee > 0) {
+      await fb.updateFeature(f.id, { fee: 0, prevFee: f.fee, refundOnReject: false });
+      await ctx.answerCbQuery('🆓 Ab FREE hai');
+      return sendFeatureView(ctx, f.id);
+    }
+    if (f.prevFee > 0) {
+      await fb.updateFeature(f.id, { fee: f.prevFee, refundOnReject: true });
+      await ctx.answerCbQuery(`💎 Paid ₹${f.prevFee}`);
+      return sendFeatureView(ctx, f.id);
+    }
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'featadm_pfamount', data: { id: f.id } };
+    await ctx.reply('💰 Paid banane ke liye fee kitni rakhni hai? (₹ number)');
+  });
+
+  bot.action(/^featadm_contact_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const f = await fb.getFeature(ctx.match[1]); if (!f) return ctx.answerCbQuery('Not found.');
+    if (f.askContact && f.questions.length === 0) return ctx.answerCbQuery('Kam se kam 1 sawal ya contact zaroori hai.', { show_alert: true });
+    await fb.updateFeature(f.id, { askContact: !f.askContact });
+    await ctx.answerCbQuery('✅ Updated');
+    await sendFeatureView(ctx, f.id);
+  });
+
+  bot.action(/^featadm_intro_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'featadm_editintro', data: { id: ctx.match[1] } };
+    await ctx.reply('📝 Nayi description bhejo (user ko feature ke saath dikhegi):');
+  });
+  bot.action(/^featadm_msg_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'featadm_editmsg', data: { id: ctx.match[1] } };
+    await ctx.reply('💬 Approve hone par user ko kaunsa message jaye? ("skip" = default message)');
+  });
+
+  // ---- questions editor ----
+  async function sendQuestions(ctx, id) {
+    const f = await fb.getFeature(id); if (!f) return ctx.reply('Feature nahi mila.');
+    const text = `${ui.banner('❓ QUESTIONS', `✦ ${f.title} ✦`.slice(0, 40))}\n\n${f.questions.map((q, i) => `${i + 1}. ${mdEscape(q)}`).join('\n') || '_Koi sawal nahi._'}\n\n_❌ dabao to sawal hat jayega._`;
+    const rows = f.questions.map((q, i) => [Markup.button.callback(`❌ ${i + 1}. ${q.slice(0, 28)}`, `featadm_qdel_${id}_${i}`)]);
+    if (f.questions.length < MAX_QUESTIONS) rows.push([Markup.button.callback('➕ Add Question', `featadm_qadd_${id}`)]);
+    rows.push([Markup.button.callback('⬅️ Back', `featadm_view_${id}`)]);
+    try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+    catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+  }
+  bot.action(/^featadm_qs_(.+)$/, async (ctx) => { if (!isOwner(ctx)) return; await ctx.answerCbQuery(); await sendQuestions(ctx, ctx.match[1]); });
+  bot.action(/^featadm_qdel_(.+)_(\d+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const f = await fb.getFeature(ctx.match[1]); if (!f) return ctx.answerCbQuery('Not found.');
+    const i = parseInt(ctx.match[2], 10);
+    if (f.questions.length <= 1 && !f.askContact) return ctx.answerCbQuery('Kam se kam 1 sawal ya contact zaroori hai.', { show_alert: true });
+    const qs = f.questions.slice(); qs.splice(i, 1);
+    await fb.updateFeature(f.id, { questions: qs });
+    await ctx.answerCbQuery('🗑 Removed');
+    await sendQuestions(ctx, f.id);
+  });
+  bot.action(/^featadm_qadd_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'featadm_qaddtext', data: { id: ctx.match[1] } };
+    await ctx.reply('❓ Naya sawal bhejo:');
+  });
+
+  // ---- reward editor ----
+  bot.action(/^featadm_rwedit_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const f = await fb.getFeature(ctx.match[1]); if (!f) return ctx.answerCbQuery('Not found.');
+    await ctx.answerCbQuery();
+    await ctx.reply(`🎁 Approve hone par kya milega?\nAbhi: *${mdEscape(rewardLabel(f.reward))}*`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+      [Markup.button.callback('🚫 Koi nahi', `featadm_rwset_${f.id}_none`), Markup.button.callback('💰 Wallet', `featadm_rwset_${f.id}_wallet`)],
+      [Markup.button.callback('👑 VIP days', `featadm_rwset_${f.id}_vip`), Markup.button.callback('🛠 Staff access', `featadm_rwset_${f.id}_staff`)],
+      [Markup.button.callback('⬅️ Back', `featadm_view_${f.id}`)]
+    ]) });
+  });
+  bot.action(/^featadm_rwset_(.+)_(none|wallet|vip|staff)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const [, id, type] = ctx.match;
+    await ctx.answerCbQuery();
+    if (type === 'none' || type === 'staff') {
+      await fb.updateFeature(id, { reward: { type, amount: 0 } });
+      await ctx.reply('✅ Reward updated.');
+      return sendFeatureView(ctx, id);
+    }
+    adminState[ctx.from.id] = { step: 'featadm_rwvalue', data: { id, type } };
+    await ctx.reply(type === 'wallet' ? '💰 Kitne ₹ wallet mein dene hain?' : '👑 Kitne din ka VIP dena hai?');
+  });
+
+  // ---- history + preview ----
+  bot.action(/^featadm_hist_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const f = await fb.getFeature(ctx.match[1]); if (!f) return ctx.answerCbQuery('Not found.');
+    await ctx.answerCbQuery();
+    const done = (await fb.getFeatureRequests(f.id)).filter(r => r.status !== 'pending').sort((a, b) => (b.decidedAt || 0) - (a.decidedAt || 0)).slice(0, 12);
+    const text = `${ui.banner('📜 HISTORY', `✦ ${f.title} ✦`.slice(0, 40))}\n\n` + (done.length
+      ? done.map(r => `${r.status === 'approved' ? '✅' : '❌'} ${mdEscape(r.tgName || r.userId)} (\`${r.userId}\`)${r.feePaid ? ` · ₹${r.feePaid}` : ''}`).join('\n')
+      : '_Abhi koi decided application nahi._');
+    await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `featadm_view_${f.id}`)]]) });
+  });
+  bot.action(/^featadm_preview_(.+)$/, async (ctx) => {
+    if (!isOwner(ctx)) return;
+    const f = await fb.getFeature(ctx.match[1]); if (!f) return ctx.answerCbQuery('Not found.');
+    await ctx.answerCbQuery();
+    const feeLine = f.fee > 0 ? `💰 Fee: *₹${f.fee}*${f.refundOnReject ? ' _(reject hone par refund)_' : ''}\n\n` : '';
+    await ctx.reply(`👁 *Preview — user ko aisa dikhega:*\n\n${ui.banner(f.title.slice(0, 30), '✦ APPLY NOW ✦')}\n\n${mdEscape(f.intro)}\n\n${feeLine}${f.askContact ? '📱 Contact share karna hoga\n' : ''}${f.questions.map((q, i) => `❓ Q${i + 1}. ${mdEscape(q)}`).join('\n')}`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `featadm_view_${f.id}`)]]) });
+  });
+
+  bot.action(/^featadm_rw_(none|wallet|vip|staff)$/, async (ctx) => {
     if (!isOwner(ctx)) return;
     const st = adminState[ctx.from.id];
     if (!st || st.step !== 'featadm_reward') return ctx.answerCbQuery('Session expire.', { show_alert: true });
     const type = ctx.match[1];
     await ctx.answerCbQuery();
-    if (type === 'none') { st.data.reward = { type: 'none', amount: 0 }; st.step = 'featadm_msg'; return ctx.reply('Approve hone par user ko kaunsa *message* bhejna hai? (ya "skip")', { parse_mode: 'Markdown' }); }
+    if (type === 'none' || type === 'staff') { st.data.reward = { type, amount: 0 }; st.step = 'featadm_msg'; return ctx.reply('Approve hone par user ko kaunsa *message* bhejna hai? (ya "skip")', { parse_mode: 'Markdown' }); }
     st.data.reward = { type, amount: 0 };
     st.step = 'featadm_rwval';
     await ctx.reply(type === 'wallet' ? '💰 Kitne ₹ wallet mein dene hain?' : '👑 Kitne din ka VIP dena hai?');
@@ -479,6 +752,45 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
         await sendFeatureView(ctx, f.id);
         return true;
       }
+      case 'featadm_tplfee': {
+        const n = num(text, 1, 100000);
+        if (n === null) { await ctx.reply('⚠️ 1 ya usse bada number daalo.'); return true; }
+        await createFromTemplate(ctx, d.tpl, n);
+        return true;
+      }
+      case 'featadm_pfamount': {
+        const n = num(text, 1, 100000);
+        if (n === null) { await ctx.reply('⚠️ 1 ya usse bada number daalo.'); return true; }
+        await fb.updateFeature(d.id, { fee: n, refundOnReject: true }); delete adminState[uid];
+        await ctx.reply(`💎 Ab yeh feature Paid hai: ₹${n}`); await sendFeatureView(ctx, d.id);
+        return true;
+      }
+      case 'featadm_editintro': {
+        if (text.length < 5 || text.length > 600) { await ctx.reply('⚠️ Description 5 se 600 characters ki ho.'); return true; }
+        await fb.updateFeature(d.id, { intro: text }); delete adminState[uid];
+        await ctx.reply('✅ Description updated.'); await sendFeatureView(ctx, d.id);
+        return true;
+      }
+      case 'featadm_editmsg': {
+        await fb.updateFeature(d.id, { approvedMessage: /^skip$/i.test(text) ? '' : text.slice(0, 400) }); delete adminState[uid];
+        await ctx.reply('✅ Approval message updated.'); await sendFeatureView(ctx, d.id);
+        return true;
+      }
+      case 'featadm_qaddtext': {
+        if (text.length < 3 || text.length > 200) { await ctx.reply('⚠️ Sawal 3 se 200 characters ka ho.'); return true; }
+        const cur = await fb.getFeature(d.id);
+        if (!cur || cur.questions.length >= MAX_QUESTIONS) { delete adminState[uid]; await ctx.reply(`⚠️ Max ${MAX_QUESTIONS} sawal.`); return true; }
+        await fb.updateFeature(d.id, { questions: [...cur.questions, text] }); delete adminState[uid];
+        await ctx.reply('✅ Sawal add ho gaya.'); await sendQuestions(ctx, d.id);
+        return true;
+      }
+      case 'featadm_rwvalue': {
+        const n = num(text, 1, 100000);
+        if (n === null) { await ctx.reply('⚠️ 1 ya usse bada number daalo.'); return true; }
+        await fb.updateFeature(d.id, { reward: { type: d.type, amount: n } }); delete adminState[uid];
+        await ctx.reply('✅ Reward updated.'); await sendFeatureView(ctx, d.id);
+        return true;
+      }
       case 'featadm_edittitle': {
         if (text.length < 2 || text.length > 40) { await ctx.reply('⚠️ Naam 2 se 40 characters ka ho.'); return true; }
         await fb.updateFeature(d.id, { title: text }); delete adminState[uid];
@@ -500,7 +812,8 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     await ctx.reply('Step 6 — Approve hone par user ko *reward* kya milega?', { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
       [Markup.button.callback('🚫 Koi reward nahi', 'featadm_rw_none')],
       [Markup.button.callback('💰 Wallet credit', 'featadm_rw_wallet')],
-      [Markup.button.callback('👑 VIP days', 'featadm_rw_vip')]
+      [Markup.button.callback('👑 VIP days', 'featadm_rw_vip')],
+      [Markup.button.callback('🛠 Staff Panel access', 'featadm_rw_staff')]
     ]) });
   }
 
@@ -511,7 +824,25 @@ function setupFeatures(bot, fb, userState, adminState, { mdEscape, sendMainMenu,
     return handleUserText(ctx);
   }
 
-  return { handleText, completeAfterPayment };
+  // Creates the ready-made "Become a Developer" feature ONCE (free by default; the owner
+  // can switch it to Paid, edit or delete it from Admin Panel -> Features).
+  async function seedDefaults() {
+    const meta = await fb.getFeatureMeta();
+    if (!meta.catsSeeded) {
+      if ((await fb.getDevCategories()).length === 0) for (const n of ['🌐 Website Developer', '📱 App Developer', '🤖 Bot Developer', '🎮 Game Developer', '🧠 AI / ML Developer']) await fb.createDevCategory(n);
+      await fb.updateFeatureMeta({ catsSeeded: true });
+    }
+    const cfg = await fb.getStaffSettings();
+    if (cfg.developerSeeded) return;
+    const all = await fb.getAllFeatures();
+    if (!all.some(x => x.templateKey === 'developer')) {
+      const t = TEMPLATES.developer;
+      await fb.createFeature({ title: t.title, intro: t.intro, questions: t.questions.slice(), askContact: t.askContact, fee: 0, refundOnReject: false, reward: { type: 'none', amount: 0 }, approvedMessage: '', templateKey: 'developer', isDeveloper: true });
+    }
+    await fb.updateStaffSettings({ developerSeeded: true });
+  }
+
+  return { handleText, completeAfterPayment, seedDefaults };
 }
 
 module.exports = { setupFeatures };
