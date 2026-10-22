@@ -180,13 +180,33 @@ let lastPushAt = 0, lastError = '', hbTimer = null;
 const parse = (s) => { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } };
 const log = (...a) => console.log('💾 [storage]', ...a);
 
+function safeErrorDetail(error) {
+  // Axios errors may have a response object without a data body. Never let
+  // error reporting throw and hide the original Firebase/network failure.
+  if (!error) return 'Unknown error';
+  const response = error.response;
+  if (response) {
+    let body = '';
+    try {
+      const data = response.data;
+      if (data == null) body = '';
+      else if (typeof data === 'string') body = data;
+      else body = JSON.stringify(data) || '';
+    } catch (_) {
+      body = '[response body could not be serialized]';
+    }
+    return `${response.status || 'HTTP error'}${body ? ` ${body.slice(0, 200)}` : ''}`;
+  }
+  return error.message || String(error);
+}
+
 async function retry(fn, label) {
   let last;
   for (let i = 0; i < CFG.initRetries; i++) {
     try { return await fn(); }
     catch (e) {
       last = e;
-      console.error(`💾 [storage] ${label} failed (try ${i + 1}/${CFG.initRetries}):`, e.response ? `${e.response.status} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.message);
+      console.error(`💾 [storage] ${label} failed (try ${i + 1}/${CFG.initRetries}):`, safeErrorDetail(e));
       if (i < CFG.initRetries - 1) await wait(CFG.initRetryDelayMs);
     }
   }
