@@ -7,6 +7,7 @@
 
 const { Markup } = require('telegraf');
 const ui = require('./ui');
+const { productFiles, productImages, fileFields, imageFields, hasDelivery, sendFiles } = require('./productmedia');
 const fampay = require('./fampay');
 
 function setupAdminPanel(bot, fb, mdEscape) {
@@ -77,13 +78,13 @@ function setupAdminPanel(bot, fb, mdEscape) {
       if (p.approvalStatus === 'pending') {
         rows.push([Markup.button.callback('✅ Approve', `admin_approveprod_${id}`), Markup.button.callback('❌ Reject', `admin_rejectprod_${id}`)]);
       }
-      rows.push([Markup.button.callback('✏️ Edit', `admin_editprod_${id}`)]);
+      rows.push([Markup.button.callback('⚙️ Manage Product', `admin_mg_${id}`)]);
       if (p.approvalStatus !== 'pending') rows.push([Markup.button.callback(p.active ? '🙈 Hide' : '✅ Show', `admin_toggleprod_${id}`)]);
       rows.push([Markup.button.callback('🔗 Get Share Link', `admin_prodlink_${id}`)]);
       rows.push([Markup.button.callback('🗑 Delete', `admin_delprod_${id}`)]);
     } else {
       if (p.approvalStatus !== 'approved') {
-        rows.push([Markup.button.callback('✏️ Edit & Resubmit', `admin_editprod_${id}`)]);
+        rows.push([Markup.button.callback('⚙️ Manage Product', `admin_mg_${id}`)]);
         rows.push([Markup.button.callback('🗑 Delete', `admin_delprod_${id}`)]);
       } else {
         rows.push([Markup.button.callback('🔗 Get Share Link', `admin_prodlink_${id}`)]);
@@ -112,7 +113,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
       try {
         if (image) await bot.telegram.sendPhoto(owner, image, { caption, parse_mode: 'Markdown', ...kb });
         else await bot.telegram.sendMessage(owner, caption, { parse_mode: 'Markdown', ...kb });
-        if (p.deliveryType === 'file' && p.fileId) await bot.telegram.sendDocument(owner, p.fileId, { caption: `📎 Delivery file for "${p.name}" (review)` });
+        if (p.deliveryType === 'file') await sendFiles((fid, extra) => bot.telegram.sendDocument(owner, fid, extra), p, `📎 Delivery file(s) for "${p.name}" (review)`);
       } catch (e) { console.error('Approval notify failed for owner', owner, e.message); }
     }
   }
@@ -493,12 +494,12 @@ function setupAdminPanel(bot, fb, mdEscape) {
       giftedBy: String(ctx.from.id),
       giftedByName: fromLabel,
       giftedByRole: owner ? 'owner' : 'staff',
-      productSnapshot: { deliveryType: p.deliveryType, fileId: p.fileId || null, deliveryLink: p.deliveryLink || null }
+      productSnapshot: { deliveryType: p.deliveryType, fileId: p.fileId || null, fileIds: productFiles(p).map(f => f.id), deliveryLink: p.deliveryLink || null }
     });
 
     try {
-      if (p.deliveryType === 'file' && p.fileId) {
-        await bot.telegram.sendDocument(targetId, p.fileId, { caption: ui.giftPlain({ name: p.name, from: fromLabel }) });
+      if (p.deliveryType === 'file' && productFiles(p).length) {
+        await sendFiles((fid, extra) => bot.telegram.sendDocument(targetId, fid, extra), p, ui.giftPlain({ name: p.name, from: fromLabel }));
       } else if (p.deliveryType === 'link' && p.deliveryLink) {
         await bot.telegram.sendMessage(targetId, ui.giftPlain({ name: p.name, from: fromLabel, link: p.deliveryLink }));
       } else {
@@ -658,6 +659,255 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.answerCbQuery();
     const cfg = await fb.getStaffSettings();
     await ctx.reply(`Step 3/5 — Discount type? Reply "flat" (₹ amount) ya "percent" (max ${cfg.couponMaxPercent}%)`, Markup.keyboard(['flat', 'percent']).oneTime().resize());
+  });
+
+
+  // One short status message after a burst of uploads (an album = several messages)
+  function queueStatus(ctx, state, textFn, kb) {
+    if (state.data._stTimer) clearTimeout(state.data._stTimer);
+    state.data._stTimer = setTimeout(() => {
+      Promise.resolve(ctx.reply(textFn(), { parse_mode: 'Markdown', ...kb })).catch(() => {});
+    }, 700);
+  }
+
+  async function askPhotos(ctx, state) {
+    const cur = productImages(state.data).length;
+    await ctx.reply(`Step 8/8 — Product *photos* bhejo (ek ya zyada, max 10). Sab bhejne ke baad *✅ Done* dabao.${state.data.isEdit ? `\n\nAbhi ${cur} photo hai — nayi photo bhejoge to purani replace ho jayengi. "skip" = purani rakho.` : ''}`, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[Markup.button.callback(state.data.isEdit ? '⏭ Skip (purani rakho)' : '⏭ Skip (photo nahi)', 'admin_pidone')]])
+    });
+  }
+
+  // wizard buttons
+  bot.action('admin_pfdone', async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'prod_deliveryvalue' || !(st.data.files || []).length) return ctx.answerCbQuery('Pehle kam se kam 1 file bhejo.', { show_alert: true });
+    if (st.data._stTimer) clearTimeout(st.data._stTimer);
+    await ctx.answerCbQuery('✅');
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    st.step = 'prod_image';
+    await askPhotos(ctx, st);
+  });
+  bot.action('admin_pidone', async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'prod_image') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    if (st.data._stTimer) clearTimeout(st.data._stTimer);
+    await ctx.answerCbQuery('✅');
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    await finalizeProduct(ctx, st);
+  });
+
+  // ============================================================
+  // ⚙️ MANAGE PRODUCT  — change one thing at a time (no full re-edit)
+  // ============================================================
+  // Staff can only manage their own products until the owner approves them; their edits go back to the owner.
+  async function mgProduct(ctx, id) {
+    if (!(await needPerm(ctx, 'products'))) return null;
+    const p = await fb.getProduct(id);
+    if (!p) { await ctx.answerCbQuery('Product not found.'); return null; }
+    if (!canManageProduct(ctx, p)) { await ctx.answerCbQuery('⛔ Approved product sirf owner manage kar sakta hai.', { show_alert: true }); return null; }
+    return p;
+  }
+  async function mgProductText(ctx, id) {   // same checks for typed replies
+    if (!(await hasPerm(ctx, 'products'))) return null;
+    const p = await fb.getProduct(id);
+    return p && canManageProduct(ctx, p) ? p : null;
+  }
+  // a staff edit sends the product back to the owner (once; later edits just update the pending one)
+  async function afterManageEdit(ctx, id) {
+    if (await isOwner(ctx)) return;
+    const p = await fb.getProduct(id);
+    if (!p || p.approvalStatus === 'pending') return;
+    const upd = await fb.updateProduct(id, { active: false, approvalStatus: 'pending', resubmittedAt: Date.now() });
+    await notifyOwnersOfSubmission(id, upd, true);
+  }
+
+  async function sendManage(ctx, id) {
+    const p = await fb.getProduct(id);
+    if (!p) return ctx.reply('Product nahi mila.');
+    const owner = await isOwner(ctx);
+    const files = productFiles(p), imgs = productImages(p);
+    const delivery = p.deliveryType === 'link' ? `🔗 Link: ${p.deliveryLink ? mdEscape(p.deliveryLink.slice(0, 40)) : 'not set'}` : `📎 Files: ${files.length}`;
+    const text = `${ui.banner('⚙️ MANAGE PRODUCT', `✦ ${p.name} ✦`.slice(0, 40))}\n\n` +
+      `💰 Price: ${p.price === 0 ? 'FREE' : '₹' + p.price}${p.price === 0 && p.referToUnlock > 0 ? ` · 🔒 ${p.referToUnlock} refer` : ''}\n📁 Category: ${mdEscape(p.category || '-')}\n📦 Stock: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n` +
+      `🖼 Photos: ${imgs.length}\n${delivery}\n${productStatusLine(p)}\n\nKya badalna hai? Neeche se ek option chuno:`;
+    const rows = [
+      [Markup.button.callback('✏️ Edit Name', `admin_mgf_name_${id}`), Markup.button.callback('💰 Edit Price', `admin_mgf_price_${id}`)],
+      [Markup.button.callback('📁 Edit Category', `admin_mgf_cat_${id}`), Markup.button.callback('📝 Edit Description', `admin_mgf_desc_${id}`)],
+      [Markup.button.callback('📦 Edit Stock', `admin_mgf_stock_${id}`), ...(p.price === 0 ? [Markup.button.callback('🔒 Refer-Lock', `admin_mgf_refer_${id}`)] : [])],
+      [Markup.button.callback(`🖼 Photos (${imgs.length})`, `admin_mgph_${id}`), Markup.button.callback(p.deliveryType === 'link' ? '🔗 Link / Files' : `📎 Files (${files.length})`, `admin_mgfl_${id}`)],
+    ];
+    if (owner && p.approvalStatus !== 'pending') rows.push([Markup.button.callback(p.active ? '🙈 Hide from store' : '✅ Show in store', `admin_toggleprod_${id}`)]);
+    rows.push([Markup.button.callback('🔁 Full Edit (sab steps)', `admin_editprod_${id}`)]);
+    rows.push([Markup.button.callback('⬅️ Back', `admin_prod_${id}`)]);
+    await show(ctx, text, Markup.inlineKeyboard(rows));
+  }
+  async function show(ctx, text, kb) {
+    try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...kb }); }
+    catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...kb }); }
+  }
+
+  bot.action(/^admin_mg_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    delete adminState[ctx.from.id];
+    await sendManage(ctx, ctx.match[1]);
+  });
+
+  // ---- single-field edits ----
+  const MG_PROMPTS = {
+    name: '✏️ Naya *naam* bhejo:',
+    price: '💰 Nayi *price* bhejo (₹ number, 0 = FREE):',
+    cat: '📁 Nayi *category* bhejo:',
+    desc: '📝 Nayi *description* bhejo:',
+    stock: '📦 Naya *stock* bhejo (-1 = unlimited):',
+    refer: '🔒 Kitne *referrals* chahiye is FREE product ke liye? (0 = lock hatao, max 100)',
+    link: '🔗 Naya *download link* bhejo:'
+  };
+  bot.action(/^admin_mgf_(name|price|cat|desc|stock|refer|link)_(.+)$/, async (ctx) => {
+    const field = ctx.match[1], id = ctx.match[2];
+    const p = await mgProduct(ctx, id); if (!p) return;
+    if (field === 'refer' && p.price !== 0) return ctx.answerCbQuery('Refer-lock sirf FREE product par lagta hai.', { show_alert: true });
+    if (field === 'link' && p.deliveryType !== 'link') return ctx.answerCbQuery('Yeh product link delivery nahi hai.', { show_alert: true });
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: `mg_${field}`, data: { productId: id } };
+    await ctx.reply(MG_PROMPTS[field], { parse_mode: 'Markdown' });
+  });
+
+  // ---- 🖼 photos ----
+  async function sendPhotoMgr(ctx, id) {
+    const p = await fb.getProduct(id); if (!p) return;
+    const imgs = productImages(p);
+    const text = `${ui.banner('🖼 PHOTOS', `✦ ${p.name} ✦`.slice(0, 40))}\n\n${imgs.length ? `Abhi *${imgs.length}* photo${imgs.length > 1 ? 's' : ''} hai.` : '_Abhi koi photo nahi._'}\n\n_Max 10 photos._`;
+    const rows = [[Markup.button.callback('➕ Add Photos', `admin_mgphadd_${id}`), ...(imgs.length ? [Markup.button.callback('👁 Show Photos', `admin_mgphshow_${id}`)] : [])]];
+    for (let i = 0; i < imgs.length; i += 4) rows.push(imgs.slice(i, i + 4).map((_, k) => Markup.button.callback(`🗑 #${i + k + 1}`, `admin_mgphdel_${id}_${i + k}`)));
+    if (imgs.length) rows.push([Markup.button.callback('🗑 Delete All Photos', `admin_mgphall_${id}`)]);
+    rows.push([Markup.button.callback('⬅️ Back', `admin_mg_${id}`)]);
+    await show(ctx, text, Markup.inlineKeyboard(rows));
+  }
+  bot.action(/^admin_mgph_(.+)$/, async (ctx) => { const p = await mgProduct(ctx, ctx.match[1]); if (!p) return; await ctx.answerCbQuery(); delete adminState[ctx.from.id]; await sendPhotoMgr(ctx, ctx.match[1]); });
+  bot.action(/^admin_mgphshow_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    const imgs = productImages(p);
+    if (!imgs.length) return ctx.answerCbQuery('Koi photo nahi hai.', { show_alert: true });
+    await ctx.answerCbQuery();
+    try {
+      if (imgs.length === 1) await bot.telegram.sendPhoto(ctx.chat ? ctx.chat.id : ctx.from.id, imgs[0], { caption: '#1' });
+      else await bot.telegram.sendMediaGroup(ctx.chat ? ctx.chat.id : ctx.from.id, imgs.map((m, i) => ({ type: 'photo', media: m, caption: `#${i + 1}` })));
+    } catch (e) { await ctx.reply('⚠️ Photos dikha nahi paya: ' + e.message); }
+  });
+  bot.action(/^admin_mgphdel_(.+)_(\d+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    const imgs = productImages(p), i = parseInt(ctx.match[2], 10);
+    if (i >= imgs.length) return ctx.answerCbQuery('Photo nahi mili.');
+    await fb.updateProduct(ctx.match[1], imageFields(imgs.filter((_, k) => k !== i)));
+    await afterManageEdit(ctx, ctx.match[1]);
+    await ctx.answerCbQuery(`🗑 Photo #${i + 1} delete`);
+    await sendPhotoMgr(ctx, ctx.match[1]);
+  });
+  bot.action(/^admin_mgphall_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    await ctx.reply('⚠️ Saari photos delete karni hain?', Markup.inlineKeyboard([[Markup.button.callback('🗑 Haan, sab delete', `admin_mgphallok_${ctx.match[1]}`), Markup.button.callback('❌ Nahi', `admin_mgph_${ctx.match[1]}`)]]));
+  });
+  bot.action(/^admin_mgphallok_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await fb.updateProduct(ctx.match[1], imageFields([]));
+    await afterManageEdit(ctx, ctx.match[1]);
+    await ctx.answerCbQuery('🗑 Deleted');
+    await sendPhotoMgr(ctx, ctx.match[1]);
+  });
+  bot.action(/^admin_mgphadd_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    if (productImages(p).length >= 10) return ctx.answerCbQuery('Max 10 photos ho chuki hain.', { show_alert: true });
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'mg_photos', data: { productId: ctx.match[1], newPhotos: [] } };
+    await ctx.reply('🖼 Nayi photos bhejo (ek ya zyada). Sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown' });
+  });
+
+  // ---- 📎 files / link ----
+  async function sendFileMgr(ctx, id) {
+    const p = await fb.getProduct(id); if (!p) return;
+    const files = productFiles(p);
+    let text = `${ui.banner('📎 DELIVERY', `✦ ${p.name} ✦`.slice(0, 40))}\n\n`;
+    const rows = [];
+    if (p.deliveryType === 'link') {
+      text += `Delivery: *🔗 Link*\n${p.deliveryLink ? mdEscape(p.deliveryLink) : '_not set_'}`;
+      rows.push([Markup.button.callback('✏️ Edit Link', `admin_mgf_link_${id}`)]);
+      rows.push([Markup.button.callback('📎 Switch to Files', `admin_mgflswfile_${id}`)]);
+    } else {
+      text += `Delivery: *📎 Files* (${files.length})\n\n${files.map((f, i) => `${i + 1}. ${mdEscape(f.name || 'file')}${f.size ? ` (${Math.max(1, Math.round(f.size / 1024))} KB)` : ''}`).join('\n') || '_koi file nahi_'}\n\n_Customer ko saari files milti hain._`;
+      rows.push([Markup.button.callback('➕ Add Another File', `admin_mgfladd_${id}`), ...(files.length ? [Markup.button.callback('👁 Show Files', `admin_mgflshow_${id}`)] : [])]);
+      for (let i = 0; i < files.length; i += 4) rows.push(files.slice(i, i + 4).map((_, k) => Markup.button.callback(`🗑 #${i + k + 1}`, `admin_mgfldel_${id}_${i + k}`)));
+      rows.push([Markup.button.callback('🔗 Switch to Link', `admin_mgflswlink_${id}`)]);
+    }
+    rows.push([Markup.button.callback('⬅️ Back', `admin_mg_${id}`)]);
+    await show(ctx, text, Markup.inlineKeyboard(rows));
+  }
+  bot.action(/^admin_mgfl_(.+)$/, async (ctx) => { const p = await mgProduct(ctx, ctx.match[1]); if (!p) return; await ctx.answerCbQuery(); delete adminState[ctx.from.id]; await sendFileMgr(ctx, ctx.match[1]); });
+  bot.action(/^admin_mgflshow_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    const files = productFiles(p);
+    if (!files.length) return ctx.answerCbQuery('Koi file nahi hai.', { show_alert: true });
+    await ctx.answerCbQuery();
+    try { await sendFiles((fid, extra) => bot.telegram.sendDocument(ctx.chat ? ctx.chat.id : ctx.from.id, fid, extra), p, `📎 ${p.name} — ${files.length} file${files.length > 1 ? 's' : ''}`); }
+    catch (e) { await ctx.reply('⚠️ Files dikha nahi paya: ' + e.message); }
+  });
+  bot.action(/^admin_mgfldel_(.+)_(\d+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    const files = productFiles(p), i = parseInt(ctx.match[2], 10);
+    if (i >= files.length) return ctx.answerCbQuery('File nahi mili.');
+    if (files.length <= 1) return ctx.answerCbQuery('Kam se kam 1 file zaroori hai. Pehle nayi file add karo, phir purani delete karo.', { show_alert: true });
+    await fb.updateProduct(ctx.match[1], fileFields(files.filter((_, k) => k !== i)));
+    await afterManageEdit(ctx, ctx.match[1]);
+    await ctx.answerCbQuery(`🗑 File #${i + 1} delete`);
+    await sendFileMgr(ctx, ctx.match[1]);
+  });
+  bot.action(/^admin_mgfladd_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'mg_files', data: { productId: ctx.match[1], newFiles: [], replaceAll: false } };
+    await ctx.reply('📎 Nayi file(s) bhejo (document ke roop mein). Sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown' });
+  });
+  bot.action(/^admin_mgflswfile_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'mg_files', data: { productId: ctx.match[1], newFiles: [], replaceAll: true } };
+    await ctx.reply('📎 File(s) bhejo — product ab *files* se deliver hoga (link hat jayega). Sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown' });
+  });
+  bot.action(/^admin_mgflswlink_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'mg_swlink', data: { productId: ctx.match[1] } };
+    await ctx.reply('🔗 Download link bhejo — product ab *link* se deliver hoga (files hat jayengi):', { parse_mode: 'Markdown' });
+  });
+
+  // ✅ Done after adding photos / files in Manage
+  bot.action('admin_mgdone', async (ctx) => {
+    const st = adminState[ctx.from.id];
+    if (!st || !['mg_photos', 'mg_files'].includes(st.step)) return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    const id = st.data.productId;
+    const p = await mgProduct(ctx, id); if (!p) return;
+    if (st.data._stTimer) clearTimeout(st.data._stTimer);
+    if (st.step === 'mg_photos') {
+      if (!st.data.newPhotos.length) return ctx.answerCbQuery('Pehle kam se kam 1 photo bhejo.', { show_alert: true });
+      await fb.updateProduct(id, imageFields([...productImages(p), ...st.data.newPhotos].slice(0, 10)));
+      await afterManageEdit(ctx, id);
+      delete adminState[ctx.from.id];
+      await ctx.answerCbQuery('✅ Photos add ho gayi');
+      try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+      return sendPhotoMgr(ctx, id);
+    }
+    if (!st.data.newFiles.length) return ctx.answerCbQuery('Pehle kam se kam 1 file bhejo.', { show_alert: true });
+    const base = (p.deliveryType === 'file' && !st.data.replaceAll) ? productFiles(p) : [];
+    await fb.updateProduct(id, { deliveryType: 'file', deliveryLink: '', ...fileFields([...base, ...st.data.newFiles]) });
+    await afterManageEdit(ctx, id);
+    delete adminState[ctx.from.id];
+    await ctx.answerCbQuery('✅ Files add ho gayi');
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    return sendFileMgr(ctx, id);
   });
 
   // ---- Approve / reject staff-submitted products (owner only) ----
@@ -1987,6 +2237,75 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
 
     // ---- Add staff ----
+    if (state.step && state.step.startsWith('mg_')) {
+      const id = state.data.productId;
+      const p = await mgProductText(ctx, id);
+      if (!p) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed ya product nahi mila.'); return true; }
+
+      if (state.step === 'mg_photos' || state.step === 'mg_files') {
+        if (/^\/?done$/i.test(text)) {   // typing "done" works like the button
+          const n = state.step === 'mg_photos' ? state.data.newPhotos.length : state.data.newFiles.length;
+          if (!n) { await ctx.reply('⚠️ Pehle kuch bhejo.'); return true; }
+          if (state.data._stTimer) clearTimeout(state.data._stTimer);
+          if (state.step === 'mg_photos') {
+            await fb.updateProduct(id, imageFields([...productImages(p), ...state.data.newPhotos].slice(0, 10)));
+            await afterManageEdit(ctx, id); delete adminState[ctx.from.id];
+            await ctx.reply('✅ Photos add ho gayi.'); await sendPhotoMgr(ctx, id);
+          } else {
+            const base = (p.deliveryType === 'file' && !state.data.replaceAll) ? productFiles(p) : [];
+            await fb.updateProduct(id, { deliveryType: 'file', deliveryLink: '', ...fileFields([...base, ...state.data.newFiles]) });
+            await afterManageEdit(ctx, id); delete adminState[ctx.from.id];
+            await ctx.reply('✅ Files add ho gayi.'); await sendFileMgr(ctx, id);
+          }
+          return true;
+        }
+        await ctx.reply(state.step === 'mg_photos' ? '🖼 Photos bhejo, ya *✅ Done* dabao.' : '📎 Files bhejo, ya *✅ Done* dabao.', { parse_mode: 'Markdown' });
+        return true;
+      }
+
+      const finish = async (patch, msg) => {
+        await fb.updateProduct(id, patch);
+        await afterManageEdit(ctx, id);
+        delete adminState[ctx.from.id];
+        await ctx.reply(msg);
+        await sendManage(ctx, id);
+        return true;
+      };
+      if (state.step === 'mg_name') {
+        if (text.length < 2 || text.length > 100) { await ctx.reply('⚠️ Naam 2 se 100 characters ka ho.'); return true; }
+        return finish({ name: text }, '✅ Naam update ho gaya.');
+      }
+      if (state.step === 'mg_price') {
+        const n = parseInt(text, 10);
+        if (isNaN(n) || n < 0 || n > 1000000) { await ctx.reply('⚠️ 0 ya usse bada number daalo.'); return true; }
+        return finish({ price: n, referToUnlock: n === 0 ? (p.referToUnlock || 0) : 0 }, `✅ Price update: ${n === 0 ? 'FREE' : '₹' + n}`);
+      }
+      if (state.step === 'mg_cat') {
+        if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category 1 se 40 characters ki ho.'); return true; }
+        return finish({ category: text }, '✅ Category update ho gayi.');
+      }
+      if (state.step === 'mg_desc') {
+        if (text.length > 800) { await ctx.reply('⚠️ Description max 800 characters.'); return true; }
+        return finish({ description: text }, '✅ Description update ho gayi.');
+      }
+      if (state.step === 'mg_stock') {
+        const n = parseInt(text, 10);
+        if (isNaN(n) || n < -1 || n > 1000000) { await ctx.reply('⚠️ Number daalo (-1 = unlimited).'); return true; }
+        return finish({ stock: n }, `✅ Stock update: ${n === -1 ? 'Unlimited' : n}`);
+      }
+      if (state.step === 'mg_refer') {
+        const n = parseInt(text, 10);
+        if (p.price !== 0 || isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo (sirf FREE product ke liye).'); return true; }
+        return finish({ referToUnlock: n }, n ? `✅ Ab ${n} referrals chahiye.` : '✅ Lock hata diya.');
+      }
+      if (state.step === 'mg_link' || state.step === 'mg_swlink') {
+        if (!/^https?:\/\/\S+$/i.test(text)) { await ctx.reply('⚠️ Sahi link bhejo (https://...).'); return true; }
+        const patch = state.step === 'mg_swlink' ? { deliveryType: 'link', deliveryLink: text, ...fileFields([]) } : { deliveryLink: text };
+        return finish(patch, '✅ Link update ho gaya.');
+      }
+      return false;
+    }
+
     if (state.step === 'stock_edit') {
       const p = await fb.getProduct(state.data.productId);
       if (!p || !(await ownsProduct(ctx, p)) || !(await hasPerm(ctx, 'stock'))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed.'); return true; }
@@ -2222,7 +2541,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
         state.data.deliveryType = type;
         state.step = 'prod_deliveryvalue';
         if (type === 'file') {
-          await ctx.reply('Step 7/8 — Now send the FILE (as document) you want delivered:', Markup.removeKeyboard());
+          state.data._filesReplaced = false;
+          await ctx.reply('Step 7/8 — Ab delivery FILES bhejo (document ke roop mein). Ek ya zyada files bhej sakte ho — sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
         } else {
           await ctx.reply('Step 7/8 — Send the download link (URL):', Markup.removeKeyboard());
         }
@@ -2230,21 +2550,31 @@ function setupAdminPanel(bot, fb, mdEscape) {
       }
 
       case 'prod_deliveryvalue':
+        if (skip) {   // editing: keep the current delivery
+          state.step = 'prod_image';
+          await askPhotos(ctx, state);
+          return true;
+        }
         if (state.data.deliveryType === 'link') {
           state.data.deliveryLink = text;
           state.step = 'prod_image';
-          await ctx.reply('Step 8/8 — Send a product image (photo), or type "skip":');
+          await askPhotos(ctx, state);
           return true;
         }
-        await ctx.reply('⚠️ Please send the file as a document, not text.');
+        if (/^\/?done$/i.test(text) && (state.data.files || []).length) {
+          state.step = 'prod_image';
+          await askPhotos(ctx, state);
+          return true;
+        }
+        await ctx.reply((state.data.files || []).length ? '📎 Aur file bhejo, ya *✅ Done* dabao.' : '⚠️ Please send the file as a document, not text.', { parse_mode: 'Markdown' });
         return true;
 
       case 'prod_image':
-        if (text.toLowerCase() === 'skip') {
+        if (text.toLowerCase() === 'skip' || (/^\/?done$/i.test(text))) {
           await finalizeProduct(ctx, state);
           return true;
         }
-        await ctx.reply('⚠️ Send a photo, or type "skip".');
+        await ctx.reply('⚠️ Photo bhejo, ya *✅ Done* / *Skip* dabao.', { parse_mode: 'Markdown' });
         return true;
 
       default:
@@ -2260,11 +2590,9 @@ function setupAdminPanel(bot, fb, mdEscape) {
       description: d.description || '', stock: d.stock,
       referToUnlock: d.price === 0 ? (d.referToUnlock || 0) : 0,
       deliveryType: d.deliveryType,
-      fileId: d.fileId || '',
-      deliveryLink: d.deliveryLink || '',
-      imageUrl: '',
-      imageFileId: imageFileIds[0] || null,
-      imageFileIds: imageFileIds.length > 0 ? imageFileIds : null
+      ...fileFields(d.deliveryType === 'file' ? productFiles({ files: d.files, fileIds: d.fileIds, fileId: d.fileId }) : []),
+      deliveryLink: d.deliveryType === 'link' ? (d.deliveryLink || '') : '',
+      ...imageFields(imageFileIds)
     };
 
     const owner = await isOwner(ctx);
@@ -2310,9 +2638,21 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (!state) return false;
 
     if (state.step === 'prod_deliveryvalue' && state.data.deliveryType === 'file') {
-      state.data.fileId = ctx.message.document.file_id;
-      state.step = 'prod_image';
-      await ctx.reply('✅ File saved.\n\nStep 8/8 — Send a product image (photo), or type "skip":');
+      // many files allowed — the admin taps ✅ Done when finished. (Editing: the first new upload replaces the old list.)
+      if (state.data.isEdit && !state.data._filesReplaced) { state.data.files = []; state.data.fileIds = null; state.data.fileId = ''; }
+      state.data._filesReplaced = true;
+      state.data.files = state.data.files || [];
+      const doc = ctx.message.document;
+      state.data.files.push({ id: doc.file_id, name: doc.file_name || '', size: doc.file_size || 0 });
+      queueStatus(ctx, state, () => `✅ *${state.data.files.length}* file${state.data.files.length > 1 ? 's' : ''} saved.\n\nAur file bhejo, ya sab ho gaya to *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — files add ho gaye', 'admin_pfdone')]]));
+      return true;
+    }
+
+    // Manage Product → add more files
+    if (state.step === 'mg_files') {
+      const doc = ctx.message.document;
+      state.data.newFiles.push({ id: doc.file_id, name: doc.file_name || '', size: doc.file_size || 0 });
+      queueStatus(ctx, state, () => `✅ *${state.data.newFiles.length}* nayi file${state.data.newFiles.length > 1 ? 's' : ''} mili.\n\nAur bhejo, ya *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — files add ho gaye', 'admin_mgdone')]]));
       return true;
     }
 
@@ -2340,28 +2680,23 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const mediaGroupId = ctx.message.media_group_id || null;
 
     if (state.step === 'prod_image') {
-      // Telegram's multi-select photo picker sends each photo as a SEPARATE
-      // message sharing the same media_group_id — not one message with many
-      // photos. We collect them into an array and only finalize once, after
-      // a short debounce window (so the last photo in the album has time to
-      // arrive) instead of finalizing on the very first photo received.
+      // Photos are collected until the admin taps ✅ Done (an album arrives as several separate messages,
+      // so we answer once, after a short pause). Editing: the first new photo replaces the old ones.
+      if (state.data.isEdit && !state.data._imagesReplaced) { state.data.imageFileIds = []; state.data.imageFileId = null; state.data.imageUrls = null; state.data.imageUrl = ''; }
+      state.data._imagesReplaced = true;
       if (!state.data.imageFileIds) state.data.imageFileIds = [];
+      if (state.data.imageFileIds.length >= 10) { await ctx.reply('⚠️ Max 10 photos. *Done* dabao.', { parse_mode: 'Markdown' }); return true; }
       state.data.imageFileIds.push(fileId);
+      queueStatus(ctx, state, () => `✅ *${state.data.imageFileIds.length}* photo${state.data.imageFileIds.length > 1 ? 's' : ''} saved.\n\nAur photo bhejo, ya sab ho gaya to *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — photos add ho gayi', 'admin_pidone')]]));
+      return true;
+    }
 
-      if (!mediaGroupId) {
-        // Single photo, no album — finalize immediately as before.
-        await finalizeProduct(ctx, state);
-        return true;
-      }
-
-      // Part of an album — debounce so we catch all photos in the group
-      // before creating the product once with every image attached.
-      if (state.data._mediaGroupTimer) clearTimeout(state.data._mediaGroupTimer);
-      state.data._mediaGroupId = mediaGroupId;
-      state.data._mediaGroupTimer = setTimeout(async () => {
-        if (!adminState[ctx.from.id]) return; // already finalized/cancelled
-        await finalizeProduct(ctx, state);
-      }, 1200);
+    // Manage Product → add more photos
+    if (state.step === 'mg_photos') {
+      const have = productImages(await fb.getProduct(state.data.productId) || {}).length;
+      if (have + state.data.newPhotos.length >= 10) { await ctx.reply('⚠️ Max 10 photos. *Done* dabao.', { parse_mode: 'Markdown' }); return true; }
+      state.data.newPhotos.push(fileId);
+      queueStatus(ctx, state, () => `✅ *${state.data.newPhotos.length}* nayi photo${state.data.newPhotos.length > 1 ? 's' : ''} mili.\n\nAur bhejo, ya *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — photos add ho gayi', 'admin_mgdone')]]));
       return true;
     }
 

@@ -8,6 +8,7 @@ const { setupStaffApply } = require('./staffApply');
 const { setupFeatures } = require('./features');
 const { setupDevelopers } = require('./developers');
 const ui = require('./ui');
+const { productFiles, hasDelivery, sendFiles } = require('./productmedia');
 
 // ---- Persistent storage: restore data from Supabase/Firebase BEFORE serving anything ----
 // (Render's disk is wiped on every deploy; see storage.js). Everything that reads
@@ -1081,6 +1082,7 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
       productSnapshot: {
         deliveryType: product.deliveryType,
         fileId: product.fileId || null,
+        fileIds: productFiles(product).map(f => f.id),
         deliveryLink: product.deliveryLink || null
       }
     });
@@ -1176,6 +1178,7 @@ bot.action(/^freedownload_(.+)$/, async (ctx) => {
     productSnapshot: {
       deliveryType: product.deliveryType,
       fileId: product.fileId || null,
+        fileIds: productFiles(product).map(f => f.id),
       deliveryLink: product.deliveryLink || null
     }
   });
@@ -1270,6 +1273,7 @@ bot.action(/^paywallet_(.+?)(?:~(.+))?$/, async (ctx) => {
       productSnapshot: {
         deliveryType: product.deliveryType,
         fileId: product.fileId || null,
+        fileIds: productFiles(product).map(f => f.id),
         deliveryLink: product.deliveryLink || null
       }
     });
@@ -1361,6 +1365,7 @@ bot.action(/^agreepay_(.+?)(?:~(.+))?$/, async (ctx) => {
     productSnapshot: {
       deliveryType: product.deliveryType,
       fileId: product.fileId || null,
+        fileIds: productFiles(product).map(f => f.id),
       deliveryLink: product.deliveryLink || null
     }
   });
@@ -1429,7 +1434,7 @@ bot.action(/^redeliver_(.+)$/, async (ctx) => {
     ...order.productSnapshot
   };
 
-  if (!product.deliveryType || (!product.fileId && !product.deliveryLink)) {
+  if (!hasDelivery(product)) {
     return ctx.reply('⚠️ Delivery details is order ke liye available nahi hain. Support se contact karo.');
   }
 
@@ -1446,10 +1451,9 @@ async function deliverProduct(ctx, product, orderId, silent) {
   }
 
   try {
-    if (product.deliveryType === 'file' && product.fileId) {
-      await ctx.replyWithDocument(product.fileId, {
-        caption: ui.deliveredPlain(product.name)
-      });
+    if (product.deliveryType === 'file' && productFiles(product).length) {
+      // every file of the product (caption on the first one)
+      await sendFiles((id, extra) => ctx.replyWithDocument(id, extra), product, ui.deliveredPlain(product.name));
     } else if (product.deliveryType === 'link' && product.deliveryLink) {
       // Sent as plain text (no Markdown parsing) — links often contain
       // underscores, asterisks, etc. which Telegram Markdown would otherwise
@@ -1898,10 +1902,8 @@ async function _checkAndProcessOrder(orderId) {
 
   if (product) {
     try {
-      if (product.deliveryType === 'file' && product.fileId) {
-        await bot.telegram.sendDocument(order.userId, product.fileId, {
-          caption: ui.deliveredPlain(product.name)
-        });
+      if (product.deliveryType === 'file' && productFiles(product).length) {
+        await sendFiles((id, extra) => bot.telegram.sendDocument(order.userId, id, extra), product, ui.deliveredPlain(product.name));
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
         // Plain text (no Markdown) — links often contain underscores/asterisks
         // which Markdown parsing would otherwise corrupt or hide.

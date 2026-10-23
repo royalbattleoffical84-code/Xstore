@@ -12,6 +12,7 @@
 // ============================================================
 
 const crypto = require('crypto');
+const { productFiles, sendFiles } = require('./productmedia');
 const path = require('path');
 const axios = require('axios');
 
@@ -226,8 +227,8 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   async function deliver(userId, product, orderId, lang) {
     const L = ['en', 'hi', 'hg'].includes(lang) ? lang : 'en';
     try {
-      if (product.deliveryType === 'file' && product.fileId) {
-        await bot.telegram.sendDocument(userId, product.fileId, { caption: ui.deliveredPlain(product.name, null, L) });
+      if (product.deliveryType === 'file' && productFiles(product).length) {
+        await sendFiles((id, extra) => bot.telegram.sendDocument(userId, id, extra), product, ui.deliveredPlain(product.name, null, L));
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
         await bot.telegram.sendMessage(userId, ui.deliveredPlain(product.name, product.deliveryLink, L));
       } else {
@@ -248,6 +249,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   const snapshotOf = (p) => ({
     deliveryType: p.deliveryType,
     fileId: p.fileId || null,
+    fileIds: productFiles(p).map(f => f.id),
     deliveryLink: p.deliveryLink || null
   });
 
