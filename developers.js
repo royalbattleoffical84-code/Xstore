@@ -115,8 +115,9 @@ function setupDevelopers(bot, fb, adminState, { mdEscape }) {
     const on = meta.hireEnabled !== false;
     const text = `${ui.banner('👨‍💻 DEVELOPERS', '✦ HIRE SECTION ✦')}\n\n` +
       `💼 Hire a Developer section: *${on ? 'ON 🟢' : 'OFF 🔴'}*\n📂 Categories: *${cats.length}*\n👨‍💻 Developers: *${devs.length}* (live: ${devs.filter(d => d.active).length})\n\n` +
-      `_Developers "Become a Developer" feature se aate hain (Admin → 🧩 Features)._`;
+      `_Developers "Become a Developer" feature se aate hain, ya ➕ Add Developer se kisi ko bhi seedha bana do (Telegram ID + naam)._`;
     await show(ctx, text, Markup.inlineKeyboard([
+      [Markup.button.callback('➕ Add Developer', 'devadm_add')],
       [Markup.button.callback('📂 Categories', 'devadm_cats'), Markup.button.callback('👥 Developers', 'devadm_devs_0')],
       [Markup.button.callback(`💼 Hire section: ${on ? 'ON' : 'OFF'}`, 'devadm_hire')],
       [Markup.button.callback('⬅️ Back', 'admin_home')]
@@ -211,6 +212,7 @@ function setupDevelopers(bot, fb, adminState, { mdEscape }) {
       `Status: *${d.active ? 'Live 🟢' : 'Hidden 🔴'}*\n📂 ${mdEscape(catName(cats, d.category))}\n🆔 \`${d.userId}\`${d.username ? `\n🔗 @${mdEscape(d.username)}` : ''}${d.phone ? `\n📱 \`${d.phone}\`` : ''}\n${d.portfolio ? `🌐 ${mdEscape(d.portfolio)}\n` : ''}\n${mdEscape((d.bio || '').slice(0, 500))}`;
     await show(ctx, text, Markup.inlineKeyboard([
       [Markup.button.callback(d.active ? '🔴 Hide' : '🟢 Show', `devadm_devtoggle_${d.userId}`), Markup.button.callback('📂 Change Category', `devadm_devcat_${d.userId}`)],
+      [Markup.button.callback('✏️ Name', `devadm_edit_name_${d.userId}`), Markup.button.callback('🔗 Username', `devadm_edit_user_${d.userId}`), Markup.button.callback('📝 Bio', `devadm_edit_bio_${d.userId}`)],
       [Markup.button.callback('🗑 Remove Developer', `devadm_devdel_${d.userId}`)],
       [Markup.button.callback('⬅️ Back', 'devadm_devs_0')]
     ]));
@@ -246,30 +248,166 @@ function setupDevelopers(bot, fb, adminState, { mdEscape }) {
     await sendDevs(ctx, 0);
   });
 
+
+  // ---- ➕ Add a developer by hand (Telegram ID or @username + name) ----
+  ownerAction(/^devadm_add$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'devadm_addid', data: {} };
+    await ctx.reply('➕ *Add Developer*\n\nUser ki *Telegram ID* bhejo (numbers). Agar wo bot use kar chuka hai to @username bhi chalega.', { parse_mode: 'Markdown' });
+  });
+
+  async function askAddCategory(ctx, st) {
+    st.step = 'devadm_addpickcat';
+    const cats = (await fb.getDevCategories()).filter(c => c.active);
+    const rows = cats.map(c => [Markup.button.callback(c.name, `devadm_addcat_${c.id}`)]);
+    rows.push([Markup.button.callback('🧩 Other (no category)', 'devadm_addcat_none')]);
+    await ctx.reply('📂 Developer ki *category* chuno:', { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) });
+  }
+  async function afterAddCategory(ctx, st) {
+    if (!st.data.username) {
+      st.step = 'devadm_adduser';
+      return ctx.reply('🔗 Developer ka Telegram *@username* bhejo (contact button ke liye), ya "skip":', { parse_mode: 'Markdown' });
+    }
+    st.step = 'devadm_addbio';
+    return ctx.reply('📝 Skills / short bio bhejo (portfolio link bhi daal sakte ho), ya "skip":');
+  }
+  ownerAction(/^devadm_addcat_(dc_[a-z0-9]+|none)$/, async (ctx) => {
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'devadm_addpickcat') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    st.data.category = ctx.match[1] === 'none' ? null : ctx.match[1];
+    await ctx.answerCbQuery('✅');
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    await afterAddCategory(ctx, st);
+  });
+
+  async function finishAdd(ctx, st) {
+    const d = st.data;
+    const links = (d.bio || '').match(/https?:\/\/\S+/);
+    await fb.upsertDeveloper({
+      userId: d.userId, name: d.name, username: d.username || '', category: d.category || null,
+      bio: d.bio || '', portfolio: links ? links[0] : '', phone: '', active: true, addedByOwner: true
+    });
+    if (await fb.getUser(d.userId)) await fb.addUserBadge(d.userId, 'Developer');
+    delete adminState[ctx.from.id];
+    let told = true;
+    try {
+      await bot.telegram.sendMessage(d.userId, `${ui.banner('👨‍💻 DEVELOPER', '✦ YOU ARE LISTED ✦')}\n\nOwner ne aapko *💼 Hire a Developer* section mein add kar diya hai. Ab clients aapko yahan se contact kar sakte hain! 🎉`, { parse_mode: 'Markdown' });
+    } catch (e) { told = false; }
+    await ctx.reply(`✅ *${mdEscape(d.name)}* ab Hire a Developer mein listed hai.${told ? '' : '\n\n_(User ko message nahi ja paya — usne bot start nahi kiya hoga. Listing phir bhi live hai.)_'}`, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[Markup.button.callback('👨‍💻 Open Developer', `devadm_dev_${d.userId}`)], [Markup.button.callback('⬅️ Back', 'admin_developers')]])
+    });
+  }
+
+  // ---- edit name / username / bio of a developer ----
+  const EDIT_PROMPTS = { name: '✏️ Developer ka naya naam bhejo:', user: '🔗 Naya Telegram @username bhejo (ya "remove" = hata do):', bio: '📝 Nayi bio / skills bhejo (portfolio link bhi chalega):' };
+  ownerAction(/^devadm_edit_(name|user|bio)_(\d+)$/, async (ctx) => {
+    if (!(await fb.getDeveloper(ctx.match[2]))) return ctx.answerCbQuery('Developer nahi mila.');
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: `devadm_edit${ctx.match[1]}`, data: { userId: ctx.match[2] } };
+    await ctx.reply(EDIT_PROMPTS[ctx.match[1]]);
+  });
+
   // ---- text steps ----
   async function handleText(ctx) {
     const st = adminState[ctx.from.id];
     if (!st || !st.step || !st.step.startsWith('devadm_') || !isOwner(ctx)) return false;
     const text = ctx.message.text.trim();
     if (/^(❌\s*)?cancel$/i.test(text) || text === '/cancel') { delete adminState[ctx.from.id]; await ctx.reply('❌ Cancel kar diya.'); return true; }
-    if (text.length < 2 || text.length > 40) { await ctx.reply('⚠️ Naam 2 se 40 characters ka ho.'); return true; }
-    if (st.step === 'devadm_addcat') {
-      const dup = (await fb.getDevCategories()).some(c => c.name.toLowerCase() === text.toLowerCase());
-      if (dup) { await ctx.reply('⚠️ Yeh category pehle se hai.'); return true; }
-      await fb.createDevCategory(text);
-      delete adminState[ctx.from.id];
-      await ctx.reply('✅ Category add ho gayi.');
-      await sendCats(ctx);
-      return true;
+    const skip = /^skip$/i.test(text);
+    const nameOk = text.length >= 2 && text.length <= 40;
+
+    switch (st.step) {
+      // categories (Hire a Developer)
+      case 'devadm_addcat': {
+        if (!nameOk) { await ctx.reply('⚠️ Naam 2 se 40 characters ka ho.'); return true; }
+        const dup = (await fb.getDevCategories()).some(c => c.name.toLowerCase() === text.toLowerCase());
+        if (dup) { await ctx.reply('⚠️ Yeh category pehle se hai.'); return true; }
+        await fb.createDevCategory(text);
+        delete adminState[ctx.from.id];
+        await ctx.reply('✅ Category add ho gayi.');
+        await sendCats(ctx);
+        return true;
+      }
+      case 'devadm_rename': {
+        if (!nameOk) { await ctx.reply('⚠️ Naam 2 se 40 characters ka ho.'); return true; }
+        await fb.updateDevCategory(st.data.id, { name: text });
+        delete adminState[ctx.from.id];
+        await ctx.reply('✅ Category rename ho gayi.');
+        await sendCat(ctx, st.data.id);
+        return true;
+      }
+
+      // ➕ add a developer by hand
+      case 'devadm_addid': {
+        let id = null, known = null;
+        if (/^\d{5,15}$/.test(text)) { id = text; known = await fb.getUser(text); }
+        else if (/^@?[A-Za-z0-9_]{4,32}$/.test(text)) {
+          const uname = text.replace(/^@/, '').toLowerCase();
+          const hit = Object.entries(await fb.getAllUsers()).find(([, u]) => (u.username || '').toLowerCase() === uname);
+          if (!hit) { await ctx.reply('⚠️ Yeh @username bot ke users mein nahi mila. Numeric *Telegram ID* bhejo.', { parse_mode: 'Markdown' }); return true; }
+          id = String(hit[0]); known = hit[1];
+        } else { await ctx.reply('⚠️ Sahi Telegram ID (numbers) ya @username bhejo.'); return true; }
+        if (await fb.getDeveloper(id)) { delete adminState[ctx.from.id]; await ctx.reply('ℹ️ Yeh user pehle se developer hai — Developers list se manage karo.', Markup.inlineKeyboard([[Markup.button.callback('👨‍💻 Open Developer', `devadm_dev_${id}`)]])); return true; }
+        st.data.userId = id; st.data.username = (known && known.username) || ''; st.data.knownName = (known && known.name) || '';
+        st.step = 'devadm_addname';
+        await ctx.reply(`✅ ID: \`${id}\`${known ? ` (${mdEscape(known.name || 'user')})` : ' (naya user)'}\n\n✏️ Developer ka *naam* bhejo (list mein yahi dikhega)${st.data.knownName ? `, ya "skip" = ${mdEscape(st.data.knownName)}` : ''}:`, { parse_mode: 'Markdown' });
+        return true;
+      }
+      case 'devadm_addname': {
+        if (skip && st.data.knownName) st.data.name = st.data.knownName.slice(0, 40);
+        else if (!nameOk) { await ctx.reply('⚠️ Naam 2 se 40 characters ka ho.'); return true; }
+        else st.data.name = text;
+        await askAddCategory(ctx, st);
+        return true;
+      }
+      case 'devadm_addpickcat':
+        await ctx.reply('👆 Upar ke buttons se category chuno.');
+        return true;
+      case 'devadm_adduser': {
+        if (!skip) {
+          if (!/^@?[A-Za-z0-9_]{4,32}$/.test(text)) { await ctx.reply('⚠️ Sahi @username bhejo ya "skip".'); return true; }
+          st.data.username = text.replace(/^@/, '');
+        }
+        st.step = 'devadm_addbio';
+        await ctx.reply('📝 Skills / short bio bhejo (portfolio link bhi daal sakte ho), ya "skip":');
+        return true;
+      }
+      case 'devadm_addbio': {
+        if (!skip) {
+          if (text.length > 600) { await ctx.reply('⚠️ Bio max 600 characters.'); return true; }
+          st.data.bio = text;
+        }
+        await finishAdd(ctx, st);
+        return true;
+      }
+
+      // edit an existing developer
+      case 'devadm_editname': {
+        if (!nameOk) { await ctx.reply('⚠️ Naam 2 se 40 characters ka ho.'); return true; }
+        await fb.updateDeveloper(st.data.userId, { name: text });
+        break;
+      }
+      case 'devadm_edituser': {
+        if (/^remove$/i.test(text)) await fb.updateDeveloper(st.data.userId, { username: '' });
+        else if (/^@?[A-Za-z0-9_]{4,32}$/.test(text)) await fb.updateDeveloper(st.data.userId, { username: text.replace(/^@/, '') });
+        else { await ctx.reply('⚠️ Sahi @username bhejo ya "remove".'); return true; }
+        break;
+      }
+      case 'devadm_editbio': {
+        if (text.length > 600) { await ctx.reply('⚠️ Bio max 600 characters.'); return true; }
+        const links = text.match(/https?:\/\/\S+/);
+        await fb.updateDeveloper(st.data.userId, { bio: text, ...(links ? { portfolio: links[0] } : {}) });
+        break;
+      }
+      default:
+        return false;
     }
-    if (st.step === 'devadm_rename') {
-      await fb.updateDevCategory(st.data.id, { name: text });
-      delete adminState[ctx.from.id];
-      await ctx.reply('✅ Category rename ho gayi.');
-      await sendCat(ctx, st.data.id);
-      return true;
-    }
-    return false;
+    // (edit cases fall through to here)
+    delete adminState[ctx.from.id];
+    await ctx.reply('✅ Update ho gaya.');
+    await sendDev(ctx, st.data.userId);
+    return true;
   }
 
   return { handleText };

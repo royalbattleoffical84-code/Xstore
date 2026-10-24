@@ -54,6 +54,17 @@ function setupAdminPanel(bot, fb, mdEscape) {
     return _botUser || '';
   }
 
+  // How a product's refer-lock is shown:  N = its own lock · "off" = switched off · default = the global setting
+  const lockLabel = (p, def) => (p.referToUnlock > 0 ? `🔒 ${p.referToUnlock}` : p.referToUnlock === -1 ? 'no lock' : (def > 0 ? `🔒 ${def} (default)` : 'no lock'));
+  // admin input -> stored value:  "default" -> null · 0 -> -1 (explicitly off) · 1..100 -> N · else undefined (invalid)
+  function parseLockInput(text) {
+    const t = String(text).trim().toLowerCase();
+    if (t === 'default' || t === 'd') return null;
+    const n = parseInt(t, 10);
+    if (isNaN(n) || n < 0 || n > 100 || String(n) !== t) return undefined;
+    return n === 0 ? -1 : n;
+  }
+
   const ownerIds = () => (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
   // ---- Product approval helpers (staff submissions need owner approval) ----
@@ -145,7 +156,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
       rows.push([Markup.button.callback('👑 Pro Plan', 'admin_proplan'), Markup.button.callback('🎯 Check-in', 'admin_checkin')]);
       rows.push([Markup.button.callback('📊 Sales Report', 'admin_report'), Markup.button.callback('🏆 Leaderboard', 'admin_leaderboard')]);
       rows.push([Markup.button.callback('🧑‍💼 Staff', 'admin_staff'), Markup.button.callback('🧩 Features', 'admin_features')]);
-      rows.push([Markup.button.callback('👨‍💻 Developers', 'admin_developers'), Markup.button.callback('💾 Backup Data', 'admin_backup')]);
+      rows.push([Markup.button.callback('👨‍💻 Developers', 'admin_developers'), Markup.button.callback('📂 Categories', 'admin_cats')]);
+      rows.push([Markup.button.callback('💾 Backup Data', 'admin_backup')]);
     } else {
       const perms = await fb.getStaffPermissions(ctx.from.id);
       const open = (perm) => perms.includes(perm) && !(perm === 'gift' && !cfg.giftEnabled);
@@ -593,7 +605,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const list = (await productsFor(ctx)).filter(([, p]) => p.price === 0);
     let text = `${ui.banner('🔗 REFER-LOCK', '✦ FREE PRODUCTS ✦')}\n\nFree product ko unlock karne ke liye user ko friends refer karne padte hain.\n\n`;
     text += list.length ? 'Product chuno:' : '_Koi FREE product nahi hai. Refer-lock sirf free products par lagta hai._';
-    const rows = list.slice(0, 25).map(([id, p]) => [Markup.button.callback(`${p.name.slice(0, 26)} · ${p.referToUnlock > 0 ? '🔒 ' + p.referToUnlock : 'no lock'}`, `admin_rlset_${id}`)]);
+    const defN = (await fb.getReferralSettings()).freeProductLock;
+    const rows = list.slice(0, 25).map(([id, p]) => [Markup.button.callback(`${p.name.slice(0, 26)} · ${lockLabel(p, defN)}`, `admin_rlset_${id}`)]);
     rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
     catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
@@ -605,7 +618,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (!p || p.price !== 0 || !(await ownsProduct(ctx, p))) return ctx.answerCbQuery('⛔ Not allowed.', { show_alert: true });
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'rl_edit', data: { productId: ctx.match[1] } };
-    await ctx.reply(`🔒 *${mdEscape(p.name)}*\nAbhi: ${p.referToUnlock > 0 ? p.referToUnlock + ' referrals' : 'koi lock nahi'}\n\nKitne referrals chahiye? (0 = lock hatao, max 100)`, { parse_mode: 'Markdown' });
+    const defN = (await fb.getReferralSettings()).freeProductLock;
+    await ctx.reply(`🔒 *${mdEscape(p.name)}*\nAbhi: ${lockLabel(p, defN)}\n\nKitne referrals chahiye? Number likho (1-100).\n• \`0\` = is product par lock nahi\n• \`default\` = global setting (${defN || 'off'})`, { parse_mode: 'Markdown' });
   });
 
   // ---- 🔗 Share Links ----
@@ -699,6 +713,171 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await finalizeProduct(ctx, st);
   });
 
+
+  // ---- refer-to-unlock step of the wizard (free products) ----
+  async function askRefer(ctx, state) {
+    const defN = (await fb.getReferralSettings()).freeProductLock;
+    const cur = state.data.isEdit ? `\nAbhi: ${lockLabel(state.data, defN)}` : '';
+    await ctx.reply(`🔒 *Refer-to-Unlock*: is FREE product ko lene ke liye user ko kitne friends refer karne honge?${cur}\n\nNeeche se chuno ya number likho (1-100).`, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback(`⚙️ Default (${defN || 'off'})`, 'admin_prefer_default'), Markup.button.callback('🔓 No lock', 'admin_prefer_off')],
+        [1, 2, 3, 5].map(n => Markup.button.callback(`${n}`, `admin_prefer_${n}`))
+      ])
+    });
+  }
+  async function afterRefer(ctx, state) {
+    state.step = 'prod_deliverytype';
+    await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
+  }
+  bot.action(/^admin_prefer_(default|off|\d+)$/, async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'prod_refer') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    const v = ctx.match[1] === 'default' ? null : ctx.match[1] === 'off' ? -1 : parseInt(ctx.match[1], 10);
+    st.data.referToUnlock = v;
+    await ctx.answerCbQuery('✅');
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    await afterRefer(ctx, st);
+  });
+
+  // ============================================================
+  // 📂 CATEGORIES — the owner manages them; everyone picks from buttons
+  // ============================================================
+  async function categoryRows(prefix) {
+    const cats = await fb.getProductCategories();
+    return chunk(cats.map(c => Markup.button.callback(c.name.slice(0, 28), `${prefix}_${c.id}`)), 2);
+  }
+  async function askCategory(ctx, state) {
+    const owner = await isOwner(ctx);
+    const cats = await fb.getProductCategories();
+    const rows = await categoryRows('admin_pcat');
+    if (owner) rows.push([Markup.button.callback('➕ New Category', 'admin_pcatnew')]);
+    if (state.data.isEdit) rows.push([Markup.button.callback(`⏭ Keep "${String(state.data.category || '').slice(0, 20)}"`, 'admin_pcatkeep')]);
+    let text = `Step 3/8 — *Category chuno*${state.data.isEdit ? ` (abhi: ${mdEscape(state.data.category || '-')})` : ''}`;
+    if (!cats.length) text += owner ? '\n\n_Abhi koi category nahi hai — ➕ New Category dabao._' : '\n\n_Abhi koi category nahi hai. Owner se category banwao._';
+    await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows.length ? rows : [[Markup.button.callback('⬅️ Back', 'admin_home')]]) });
+  }
+  async function afterCategory(ctx, state) {
+    state.step = 'prod_description';
+    await ctx.reply('Step 4/8 — Description? (or "skip")');
+  }
+  // typed category name: the owner may create a new one, staff must match an existing one
+  async function resolveCategory(ctx, text) {
+    const name = text.trim();
+    const found = (await fb.getProductCategories()).find(c => c.name.toLowerCase() === name.toLowerCase());
+    if (found) return found;
+    if (await isOwner(ctx) && name.length >= 1 && name.length <= 40) return fb.createProductCategory(name);
+    return null;
+  }
+  bot.action(/^admin_pcat_(pc_[a-z0-9]+)$/, async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'prod_category') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    const cat = (await fb.getProductCategories()).find(c => c.id === ctx.match[1]);
+    if (!cat) return ctx.answerCbQuery('Category nahi mili.', { show_alert: true });
+    st.data.category = cat.name;
+    await ctx.answerCbQuery('✅ ' + cat.name);
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    await ctx.reply(`📁 Category: *${mdEscape(cat.name)}*`, { parse_mode: 'Markdown' });
+    await afterCategory(ctx, st);
+  });
+  bot.action('admin_pcatkeep', async (ctx) => {
+    if (!(await isAdminOrStaff(ctx))) return;
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'prod_category') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    await ctx.answerCbQuery('✅');
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    await afterCategory(ctx, st);
+  });
+  bot.action('admin_pcatnew', async (ctx) => {
+    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Nayi category sirf owner bana sakta hai.', { show_alert: true });
+    const st = adminState[ctx.from.id];
+    if (!st || st.step !== 'prod_category') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
+    await ctx.answerCbQuery();
+    st.step = 'prod_category_new';
+    await ctx.reply('➕ Nayi category ka naam bhejo:');
+  });
+
+  // ---- Manage Product → change category with buttons ----
+  bot.action(/^admin_mgcat_(.+)$/, async (ctx) => {
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    const id = ctx.match[1];
+    const rows = await categoryRows(`admin_mgcatset_${id}`);
+    if (await isOwner(ctx)) rows.push([Markup.button.callback('➕ New Category', `admin_mgcatnew_${id}`)]);
+    rows.push([Markup.button.callback('⬅️ Back', `admin_mg_${id}`)]);
+    await show(ctx, `📁 *Category chuno*\nAbhi: *${mdEscape(p.category || '-')}*`, Markup.inlineKeyboard(rows));
+  });
+  bot.action(/^admin_mgcatset_(.+)_(pc_[a-z0-9]+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const p = await mgProduct(ctx, id); if (!p) return;
+    const cat = (await fb.getProductCategories()).find(c => c.id === ctx.match[2]);
+    if (!cat) return ctx.answerCbQuery('Category nahi mili.', { show_alert: true });
+    await fb.updateProduct(id, { category: cat.name });
+    await afterManageEdit(ctx, id);
+    await ctx.answerCbQuery('✅ ' + cat.name);
+    await sendManage(ctx, id);
+  });
+  bot.action(/^admin_mgcatnew_(.+)$/, async (ctx) => {
+    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Nayi category sirf owner bana sakta hai.', { show_alert: true });
+    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'mg_catnew', data: { productId: ctx.match[1] } };
+    await ctx.reply('➕ Nayi category ka naam bhejo (product ko isi mein daal denge):');
+  });
+
+  // ---- Admin Panel → 📂 Categories (owner) ----
+  async function sendCats(ctx) {
+    const [cats, prods] = await Promise.all([fb.getProductCategories(), fb.getAllProducts(false)]);
+    const cnt = (n) => Object.values(prods).filter(p => p.category === n).length;
+    let text = `${ui.banner('📂 CATEGORIES', '✦ PRODUCT CATEGORIES ✦')}\n\n`;
+    text += cats.length ? cats.map(c => `📁 ${mdEscape(c.name)} — ${cnt(c.name)} product${cnt(c.name) === 1 ? '' : 's'}`).join('\n') : '_Abhi koi category nahi. Add karo!_';
+    text += '\n\n_Product add karte waqt in categories ke buttons milte hain. Staff sirf inhi mein se chun sakta hai._';
+    const rows = [[Markup.button.callback('➕ Add Category', 'admin_catadd')]];
+    cats.forEach(c => rows.push([Markup.button.callback(`📁 ${c.name.slice(0, 26)} (${cnt(c.name)})`, `admin_cat_${c.id}`)]));
+    rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
+    await show(ctx, text, Markup.inlineKeyboard(rows));
+  }
+  bot.action('admin_cats', async (ctx) => { if (!(await isOwner(ctx))) return; await ctx.answerCbQuery(); delete adminState[ctx.from.id]; await sendCats(ctx); });
+  bot.action('admin_catadd', async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'cat_add', data: {} };
+    await ctx.reply('➕ Nayi category ka naam bhejo (emoji ke saath bhi chalega):');
+  });
+  async function sendCat(ctx, id) {
+    const c = (await fb.getProductCategories()).find(x => x.id === id);
+    if (!c) return ctx.reply('Category nahi mili.');
+    const n = Object.values(await fb.getAllProducts(false)).filter(p => p.category === c.name).length;
+    await show(ctx, `${ui.banner('📁 CATEGORY', `✦ ${c.name} ✦`.slice(0, 40))}\n\n📦 Products: *${n}*\n\n_Delete karne par is category ke products "Other" mein chale jayenge. Kisi ek product ki category badalni ho to Products → product → Manage → Edit Category._`, Markup.inlineKeyboard([
+      [Markup.button.callback('✏️ Rename', `admin_catren_${id}`), Markup.button.callback('🗑 Delete', `admin_catdel_${id}`)],
+      [Markup.button.callback('⬅️ Back', 'admin_cats')]
+    ]));
+  }
+  bot.action(/^admin_cat_(pc_[a-z0-9]+)$/, async (ctx) => { if (!(await isOwner(ctx))) return; await ctx.answerCbQuery(); await sendCat(ctx, ctx.match[1]); });
+  bot.action(/^admin_catren_(pc_[a-z0-9]+)$/, async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'cat_rename', data: { id: ctx.match[1] } };
+    await ctx.reply('✏️ Category ka naya naam bhejo (is category ke saare products ka naam bhi badal jayega):');
+  });
+  bot.action(/^admin_catdel_(pc_[a-z0-9]+)$/, async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery();
+    await ctx.reply('⚠️ Category delete karni hai? Is ke products "Other" category mein chale jayenge.', Markup.inlineKeyboard([[
+      Markup.button.callback('🗑 Haan, delete', `admin_catdelok_${ctx.match[1]}`), Markup.button.callback('❌ Nahi', `admin_cat_${ctx.match[1]}`)
+    ]]));
+  });
+  bot.action(/^admin_catdelok_(pc_[a-z0-9]+)$/, async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    const r = await fb.deleteProductCategory(ctx.match[1]);
+    if (r.error === 'other_in_use') return ctx.answerCbQuery(`"Other" mein ${r.count} products hain — pehle unki category badlo.`, { show_alert: true });
+    await ctx.answerCbQuery('🗑 Deleted');
+    if (r.moved) await ctx.reply(`📦 ${r.moved} product${r.moved > 1 ? 's' : ''} "Other" category mein move ho gaye.`);
+    await sendCats(ctx);
+  });
+
   // ============================================================
   // ⚙️ MANAGE PRODUCT  — change one thing at a time (no full re-edit)
   // ============================================================
@@ -731,11 +910,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const files = productFiles(p), imgs = productImages(p);
     const delivery = p.deliveryType === 'link' ? `🔗 Link: ${p.deliveryLink ? mdEscape(p.deliveryLink.slice(0, 40)) : 'not set'}` : `📎 Files: ${files.length}`;
     const text = `${ui.banner('⚙️ MANAGE PRODUCT', `✦ ${p.name} ✦`.slice(0, 40))}\n\n` +
-      `💰 Price: ${p.price === 0 ? 'FREE' : '₹' + p.price}${p.price === 0 && p.referToUnlock > 0 ? ` · 🔒 ${p.referToUnlock} refer` : ''}\n📁 Category: ${mdEscape(p.category || '-')}\n📦 Stock: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n` +
+      `💰 Price: ${p.price === 0 ? 'FREE' : '₹' + p.price}${p.price === 0 ? ` · ${lockLabel(p, (await fb.getReferralSettings()).freeProductLock)}` : ''}\n📁 Category: ${mdEscape(p.category || '-')}\n📦 Stock: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n` +
       `🖼 Photos: ${imgs.length}\n${delivery}\n${productStatusLine(p)}\n\nKya badalna hai? Neeche se ek option chuno:`;
     const rows = [
       [Markup.button.callback('✏️ Edit Name', `admin_mgf_name_${id}`), Markup.button.callback('💰 Edit Price', `admin_mgf_price_${id}`)],
-      [Markup.button.callback('📁 Edit Category', `admin_mgf_cat_${id}`), Markup.button.callback('📝 Edit Description', `admin_mgf_desc_${id}`)],
+      [Markup.button.callback('📁 Edit Category', `admin_mgcat_${id}`), Markup.button.callback('📝 Edit Description', `admin_mgf_desc_${id}`)],
       [Markup.button.callback('📦 Edit Stock', `admin_mgf_stock_${id}`), ...(p.price === 0 ? [Markup.button.callback('🔒 Refer-Lock', `admin_mgf_refer_${id}`)] : [])],
       [Markup.button.callback(`🖼 Photos (${imgs.length})`, `admin_mgph_${id}`), Markup.button.callback(p.deliveryType === 'link' ? '🔗 Link / Files' : `📎 Files (${files.length})`, `admin_mgfl_${id}`)],
     ];
@@ -763,10 +942,10 @@ function setupAdminPanel(bot, fb, mdEscape) {
     cat: '📁 Nayi *category* bhejo:',
     desc: '📝 Nayi *description* bhejo:',
     stock: '📦 Naya *stock* bhejo (-1 = unlimited):',
-    refer: '🔒 Kitne *referrals* chahiye is FREE product ke liye? (0 = lock hatao, max 100)',
+    refer: '🔒 Kitne *referrals* chahiye? Number (1-100), `0` = lock nahi, `default` = global setting.',
     link: '🔗 Naya *download link* bhejo:'
   };
-  bot.action(/^admin_mgf_(name|price|cat|desc|stock|refer|link)_(.+)$/, async (ctx) => {
+  bot.action(/^admin_mgf_(name|price|desc|stock|refer|link)_(.+)$/, async (ctx) => {
     const field = ctx.match[1], id = ctx.match[2];
     const p = await mgProduct(ctx, id); if (!p) return;
     if (field === 'refer' && p.price !== 0) return ctx.answerCbQuery('Refer-lock sirf FREE product par lagta hai.', { show_alert: true });
@@ -1371,9 +1550,16 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.answerCbQuery();
     const settings = await fb.getReferralSettings();
     await ctx.reply(
-      `🔗 *Referral Settings*\n\nBonus Type: ${settings.bonusType}\nBonus Amount: ${settings.bonusType === 'percent' ? settings.bonusAmount + '%' : '₹' + settings.bonusAmount}`,
-      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('✏️ Edit', 'admin_editreferral')], [Markup.button.callback('⬅️ Back', 'admin_home')]]) }
+      `🔗 *Referral Settings*\n\nBonus Type: ${settings.bonusType}\nBonus Amount: ${settings.bonusType === 'percent' ? settings.bonusAmount + '%' : '₹' + settings.bonusAmount}\n\n🔒 *Free product lock:* ${settings.freeProductLock > 0 ? settings.freeProductLock + ' referral' + (settings.freeProductLock > 1 ? 's' : '') : 'OFF'}\n_Har FREE product (jiska apna lock set nahi) lene ke liye user ko itne friends refer karne padte hain. 0 = free products sabke liye khule._`,
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('✏️ Edit Bonus', 'admin_editreferral')], [Markup.button.callback('🔒 Free Product Lock', 'admin_freelock')], [Markup.button.callback('⬅️ Back', 'admin_home')]]) }
     );
+  });
+
+  bot.action('admin_freelock', async (ctx) => {
+    if (!(await isOwner(ctx))) return;
+    await ctx.answerCbQuery();
+    adminState[ctx.from.id] = { step: 'awaiting_free_lock', data: {} };
+    await ctx.reply('🔒 Har FREE product ke liye kitne referrals chahiye? Number bhejo (0 = sab free products sabke liye khule, max 100).');
   });
 
   bot.action('admin_editreferral', async (ctx) => {
@@ -2278,11 +2464,13 @@ function setupAdminPanel(bot, fb, mdEscape) {
       if (state.step === 'mg_price') {
         const n = parseInt(text, 10);
         if (isNaN(n) || n < 0 || n > 1000000) { await ctx.reply('⚠️ 0 ya usse bada number daalo.'); return true; }
-        return finish({ price: n, referToUnlock: n === 0 ? (p.referToUnlock || 0) : 0 }, `✅ Price update: ${n === 0 ? 'FREE' : '₹' + n}`);
+        return finish({ price: n, referToUnlock: n === 0 ? (p.referToUnlock === undefined ? null : p.referToUnlock) : null }, `✅ Price update: ${n === 0 ? 'FREE' : '₹' + n}`);
       }
-      if (state.step === 'mg_cat') {
-        if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category 1 se 40 characters ki ho.'); return true; }
-        return finish({ category: text }, '✅ Category update ho gayi.');
+      if (state.step === 'mg_catnew') {
+        if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Nayi category sirf owner bana sakta hai.'); return true; }
+        if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category naam 1 se 40 characters ka ho.'); return true; }
+        const cat = await fb.createProductCategory(text);
+        return finish({ category: cat.name }, `✅ Category: ${cat.name}`);
       }
       if (state.step === 'mg_desc') {
         if (text.length > 800) { await ctx.reply('⚠️ Description max 800 characters.'); return true; }
@@ -2294,9 +2482,9 @@ function setupAdminPanel(bot, fb, mdEscape) {
         return finish({ stock: n }, `✅ Stock update: ${n === -1 ? 'Unlimited' : n}`);
       }
       if (state.step === 'mg_refer') {
-        const n = parseInt(text, 10);
-        if (p.price !== 0 || isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo (sirf FREE product ke liye).'); return true; }
-        return finish({ referToUnlock: n }, n ? `✅ Ab ${n} referrals chahiye.` : '✅ Lock hata diya.');
+        const v = parseLockInput(text);
+        if (p.price !== 0 || v === undefined) { await ctx.reply('⚠️ 1-100 number, `0` ya `default` likho (sirf FREE product ke liye).', { parse_mode: 'Markdown' }); return true; }
+        return finish({ referToUnlock: v }, v > 0 ? `✅ Ab ${v} referrals chahiye.` : v === -1 ? '✅ Lock hata diya.' : '✅ Global setting use hogi.');
       }
       if (state.step === 'mg_link' || state.step === 'mg_swlink') {
         if (!/^https?:\/\/\S+$/i.test(text)) { await ctx.reply('⚠️ Sahi link bhejo (https://...).'); return true; }
@@ -2320,11 +2508,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (state.step === 'rl_edit') {
       const p = await fb.getProduct(state.data.productId);
       if (!p || p.price !== 0 || !(await ownsProduct(ctx, p)) || !(await hasPerm(ctx, 'referlock'))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed.'); return true; }
-      const n = parseInt(text, 10);
-      if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
-      await fb.updateProduct(state.data.productId, { referToUnlock: n });
+      const v = parseLockInput(text);
+      if (v === undefined) { await ctx.reply('⚠️ 1-100 number, `0` ya `default` likho.', { parse_mode: 'Markdown' }); return true; }
+      await fb.updateProduct(state.data.productId, { referToUnlock: v });
       delete adminState[ctx.from.id];
-      await ctx.reply(`✅ *${mdEscape(p.name)}*: ${n > 0 ? `ab ${n} referrals chahiye` : 'lock hata diya'}`, { parse_mode: 'Markdown', ...adminBackButton('admin_referlock') });
+      await ctx.reply(`✅ *${mdEscape(p.name)}*: ${v > 0 ? `ab ${v} referrals chahiye` : v === -1 ? 'lock hata diya' : 'global setting use hogi'}`, { parse_mode: 'Markdown', ...adminBackButton('admin_referlock') });
       return true;
     }
 
@@ -2387,6 +2575,33 @@ function setupAdminPanel(bot, fb, mdEscape) {
       state.data.bonusType = type;
       state.step = 'referral_amount';
       await ctx.reply(`Bonus amount? (${type === 'flat' ? '₹' : '%'})`, Markup.removeKeyboard());
+      return true;
+    }
+    if (state.step === 'cat_add' || state.step === 'cat_rename') {
+      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
+      if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category naam 1 se 40 characters ka ho.'); return true; }
+      if (state.step === 'cat_add') {
+        const dup = (await fb.getProductCategories()).some(c => c.name.toLowerCase() === text.toLowerCase());
+        if (dup) { await ctx.reply('⚠️ Yeh category pehle se hai.'); return true; }
+        await fb.createProductCategory(text);
+        delete adminState[ctx.from.id];
+        await ctx.reply('✅ Category add ho gayi.');
+      } else {
+        const r = await fb.renameProductCategory(state.data.id, text);
+        if (r && r.error === 'exists') { await ctx.reply('⚠️ Is naam ki category pehle se hai.'); return true; }
+        delete adminState[ctx.from.id];
+        await ctx.reply('✅ Category rename ho gayi (products ka naam bhi badal gaya).');
+      }
+      await sendCats(ctx);
+      return true;
+    }
+    if (state.step === 'awaiting_free_lock') {
+      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
+      const n = parseInt(text, 10);
+      if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
+      await fb.setReferralSettings({ freeProductLock: n });
+      delete adminState[ctx.from.id];
+      await ctx.reply(n ? `✅ Ab har FREE product ke liye ${n} referral${n > 1 ? 's' : ''} chahiye (jinka apna lock set nahi).` : '✅ Free product lock band — free products sabke liye khule hain.');
       return true;
     }
     if (state.step === 'referral_amount') {
@@ -2492,15 +2707,28 @@ function setupAdminPanel(bot, fb, mdEscape) {
           state.data.price = price;
         }
         state.step = 'prod_category';
-        await ctx.reply(`Step 3/8 — Category?${state.data.isEdit ? ` Current: ${state.data.category}` : ''}`);
+        await askCategory(ctx, state);
         return true;
       }
 
-      case 'prod_category':
-        if (!skip) state.data.category = text;
-        state.step = 'prod_description';
-        await ctx.reply('Step 4/8 — Description? (or "skip")');
+      case 'prod_category': {
+        if (skip) { await afterCategory(ctx, state); return true; }
+        const picked = await resolveCategory(ctx, text);
+        if (!picked) { await ctx.reply('⚠️ Category list mein nahi hai — neeche ke buttons se chuno.'); await askCategory(ctx, state); return true; }
+        state.data.category = picked.name;
+        await afterCategory(ctx, state);
         return true;
+      }
+
+      case 'prod_category_new': {
+        if (!(await isOwner(ctx))) { await ctx.reply('⛔ Nayi category sirf owner bana sakta hai.'); await askCategory(ctx, state); state.step = 'prod_category'; return true; }
+        if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category naam 1 se 40 characters ka ho.'); return true; }
+        const cat = await fb.createProductCategory(text);
+        state.data.category = cat.name;
+        await ctx.reply(`✅ Category: *${mdEscape(cat.name)}*`, { parse_mode: 'Markdown' });
+        await afterCategory(ctx, state);
+        return true;
+      }
 
       case 'prod_description':
         if (text.toLowerCase() !== 'skip') state.data.description = text;
@@ -2515,10 +2743,10 @@ function setupAdminPanel(bot, fb, mdEscape) {
         }
         if (state.data.price === 0) {
           state.step = 'prod_refer';
-          await ctx.reply(`🔒 Refer-to-Unlock: is FREE product ko lene ke liye user ko kitne friends refer karne honge? (0 = koi lock nahi, max 100)${state.data.isEdit ? ` Current: ${state.data.referToUnlock || 0}` : ''}`, Markup.removeKeyboard());
+          await askRefer(ctx, state);
           return true;
         }
-        state.data.referToUnlock = 0;
+        state.data.referToUnlock = null;
         state.step = 'prod_deliverytype';
         await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
         return true;
@@ -2526,12 +2754,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
       case 'prod_refer': {
         if (!skip) {
-          const n = parseInt(text);
-          if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
-          state.data.referToUnlock = n;
+          const v = parseLockInput(text);
+          if (v === undefined) { await ctx.reply('⚠️ 1-100 number, `0` (lock nahi) ya `default` likho.', { parse_mode: 'Markdown' }); return true; }
+          state.data.referToUnlock = v;
         }
-        state.step = 'prod_deliverytype';
-        await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
+        await afterRefer(ctx, state);
         return true;
       }
 
@@ -2588,7 +2815,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const productData = {
       name: d.name, price: d.price, category: d.category,
       description: d.description || '', stock: d.stock,
-      referToUnlock: d.price === 0 ? (d.referToUnlock || 0) : 0,
+      referToUnlock: d.price === 0 ? (d.referToUnlock === undefined ? null : d.referToUnlock) : null,
       deliveryType: d.deliveryType,
       ...fileFields(d.deliveryType === 'file' ? productFiles({ files: d.files, fileIds: d.fileIds, fileId: d.fileId }) : []),
       deliveryLink: d.deliveryType === 'link' ? (d.deliveryLink || '') : '',
@@ -2596,6 +2823,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     };
 
     const owner = await isOwner(ctx);
+    if (d.category) await fb.createProductCategory(d.category);   // keeps the managed category list in sync
     const imgNote = imageFileIds.length > 1 ? ` (${imageFileIds.length} images)` : '';
 
     if (d.isEdit) {

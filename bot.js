@@ -262,6 +262,7 @@ const features = setupFeatures(bot, fb, userState, adminPanel.adminState, { mdEs
 const developers = setupDevelopers(bot, fb, adminPanel.adminState, { mdEscape });
 // First boot: default developer categories + the ready-made "Become a Developer" feature
 storageReady.then(() => features.seedDefaults()).catch((e) => console.error('seedDefaults failed:', e && e.message));
+storageReady.then(() => fb.seedProductCategories()).catch((e) => console.error('seedProductCategories failed:', e && e.message));
 
 // ============ START / REGISTER ============
 
@@ -939,13 +940,14 @@ async function sendProductCard(ctx, id, p) {
   const viewsLine = p.views ? `\n👁 ${p.views} views` : '';
   const priceLabel = p.price === 0 ? '*FREE* 🎁' : `*₹${p.price}*`;
 
-  const lockLine = (p.price === 0 && p.referToUnlock > 0) ? `\n🔒 *Refer ${p.referToUnlock} friend${p.referToUnlock > 1 ? 's' : ''} to unlock*` : '';
+  const lockN = fb.effectiveReferLock(p, (await fb.getReferralSettings()).freeProductLock);
+  const lockLine = lockN > 0 ? `\n🔒 *Refer ${lockN} friend${lockN > 1 ? 's' : ''} to unlock*` : '';
   const caption = `✨ *${mdEscape(p.name)}*\n\n${mdEscape(p.description) || ''}\n\n💰 Price: ${priceLabel}${lockLine}${ratingLine}${stockLine}${viewsLine}`;
 
   const isFree = p.price === 0;
   const rows = [
     [isFree
-      ? Markup.button.callback(p.referToUnlock > 0 ? `🔒 Refer ${p.referToUnlock} to Unlock` : '📥 Download Free', `freedownload_${id}`)
+      ? Markup.button.callback(lockN > 0 ? `🔒 Refer ${lockN} to Unlock` : '📥 Download Free', `freedownload_${id}`)
       : Markup.button.callback('🛒 Buy Now', `buy_${id}`)],
     [Markup.button.callback('⭐ Reviews', `reviews_${id}`)]
   ];
@@ -1131,7 +1133,7 @@ bot.action(/^freedownload_(.+)$/, async (ctx) => {
   }
 
   // Refer-to-unlock: referrals are spent like tokens. VIP + owners skip the lock.
-  const need = product.referToUnlock || 0;
+  const need = fb.effectiveReferLock(product, (await fb.getReferralSettings()).freeProductLock);
   let spendReferralsN = 0;
   if (need > 0 && !fb.isAdmin(telegramId) && !(await fb.isUserVip(telegramId))) {
     const rb = await fb.getReferralBalance(telegramId);

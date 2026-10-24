@@ -38,6 +38,7 @@ const FILES = {
   features: 'features.json',
   featureRequests: 'featureRequests.json',
   featureMeta: 'featureMeta.json',
+  productCategories: 'productCategories.json',
   developers: 'developers.json',
   devCategories: 'devCategories.json',
   paymentSettings: 'paymentSettings.json'
@@ -544,13 +545,29 @@ async function getSalesReport(periodDays) {
 
 // ================= REFERRAL =================
 
+// freeProductLock = referrals a user must "spend" to take a FREE product (0 = free products are open to everyone).
+// It applies to every free product that has no lock of its own.
 async function getReferralSettings() {
   const s = readCollection('referralSettings');
-  return Object.keys(s).length ? s : { bonusAmount: 20, bonusType: 'flat' };
+  return { bonusAmount: 20, bonusType: 'flat', freeProductLock: 1, ...s };
 }
 
 async function setReferralSettings(data) {
-  await writeCollection('referralSettings', data);
+  const cur = readCollection('referralSettings');
+  await writeCollection('referralSettings', { ...cur, ...data });   // merge: never drop the other fields
+}
+
+// The lock that really applies to a product:
+//   paid product            -> none
+//   referToUnlock = N (>0)  -> N          (this product's own lock)
+//   referToUnlock = -1      -> none       (owner switched the lock OFF for this product)
+//   unset / 0 / null        -> the global default (Referral settings)
+function effectiveReferLock(p, defaultN) {
+  if (!p || p.price !== 0) return 0;
+  const v = p.referToUnlock;
+  if (typeof v === 'number' && v > 0) return v;
+  if (v === -1) return 0;
+  return Math.max(0, parseInt(defaultN, 10) || 0);
 }
 
 async function processReferralBonus(buyerTelegramId, orderAmount) {
@@ -1063,6 +1080,53 @@ async function addUserBadge(userId, label) {
   });
 }
 
+// ---- Product categories (managed by the owner; staff can only pick from them) ----
+async function getProductCategories() {
+  return Object.values(readCollection('productCategories')).sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+async function createProductCategory(name) {
+  const n = String(name).trim();
+  const existing = (await getProductCategories()).find(c => c.name.toLowerCase() === n.toLowerCase());
+  if (existing) return existing;
+  const id = generateId('pc_');
+  const order = Object.values(readCollection('productCategories')).reduce((m, c) => Math.max(m, c.order || 0), 0) + 1;
+  const cat = { id, name: n, order, createdAt: Date.now() };
+  await updateCollectionAtomic('productCategories', (c) => { c[id] = cat; });
+  return cat;
+}
+async function renameProductCategory(id, newName) {
+  const n = String(newName).trim();
+  const cur = readCollection('productCategories')[id];
+  if (!cur) return null;
+  if ((await getProductCategories()).some(c => c.id !== id && c.name.toLowerCase() === n.toLowerCase())) return { error: 'exists' };
+  const old = cur.name;
+  await updateCollectionAtomic('productCategories', (c) => { c[id].name = n; });
+  await updateCollectionAtomic('products', (all) => { Object.values(all).forEach(p => { if (p.category === old) p.category = n; }); });
+  return { name: n };
+}
+// products of a deleted category move to "Other"
+async function deleteProductCategory(id) {
+  const cur = readCollection('productCategories')[id];
+  if (!cur) return { moved: 0 };
+  const count = Object.values(readCollection('products')).filter(p => p.category === cur.name).length;
+  if (cur.name === 'Other' && count) return { error: 'other_in_use', count };
+  let moved = 0;
+  if (count) {
+    await createProductCategory('Other');
+    await updateCollectionAtomic('products', (all) => { Object.values(all).forEach(p => { if (p.category === cur.name) { p.category = 'Other'; moved++; } }); });
+  }
+  await updateCollectionAtomic('productCategories', (c) => { delete c[id]; });
+  return { moved };
+}
+// first boot: turn the categories your products already use into managed categories
+async function seedProductCategories() {
+  const meta = readCollection('featureMeta');
+  if (meta.prodCatsSeeded) return;
+  const names = [...new Set(Object.values(readCollection('products')).map(p => (p.category || '').trim()).filter(Boolean))];
+  for (const n of names) await createProductCategory(n);
+  await updateCollectionAtomic('featureMeta', (m) => { m.prodCatsSeeded = true; });
+}
+
 async function getStaff(telegramId) {
   const staff = readCollection('staff');
   return staff[String(telegramId)] || null;
@@ -1197,6 +1261,12 @@ module.exports = {
   getAllStaff,
   addStaff,
   getStaff,
+  effectiveReferLock,
+  getProductCategories,
+  createProductCategory,
+  renameProductCategory,
+  deleteProductCategory,
+  seedProductCategories,
   getFeatureMeta,
   updateFeatureMeta,
   getDevCategories,

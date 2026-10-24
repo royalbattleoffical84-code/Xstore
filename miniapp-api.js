@@ -187,7 +187,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       customButtonText: p.customButtonText || '',
       customButtonUrl: p.customButtonUrl || '',
       deliveryType: p.deliveryType || '',
-      referToUnlock: p.price === 0 ? (p.referToUnlock || 0) : 0
+      referToUnlock: fb.effectiveReferLock(p, (await fb.getReferralSettings()).freeProductLock)
     };
   }
 
@@ -377,12 +377,13 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
 
       // Refer-to-unlock (VIP + owners skip it)
       let spendRef = 0;
-      if (isFree && product.referToUnlock > 0 && !fb.isAdmin(uid) && !(await fb.isUserVip(uid))) {
+      const lockN = fb.effectiveReferLock(product, (await fb.getReferralSettings()).freeProductLock);
+      if (isFree && lockN > 0 && !fb.isAdmin(uid) && !(await fb.isUserVip(uid))) {
         const rb = await fb.getReferralBalance(uid);
-        if (rb.available < product.referToUnlock) {
-          return res.json({ ok: false, code: 'REFER_LOCKED', error: 'Refer to unlock', need: product.referToUnlock, have: rb.available });
+        if (rb.available < lockN) {
+          return res.json({ ok: false, code: 'REFER_LOCKED', error: 'Refer to unlock', need: lockN, have: rb.available });
         }
-        spendRef = product.referToUnlock;
+        spendRef = lockN;
       }
       const { final, couponUsed } = (isFree || isVip) ? { final: 0, couponUsed: null } : await priceWithCoupon(product, coupon, productId);
 
