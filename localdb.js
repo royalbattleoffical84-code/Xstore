@@ -454,11 +454,27 @@ async function createOrder(orderData) {
   return order;
 }
 
+// Order tracking + notifications: every status/refund change is appended to the order's
+// timeline and passed to an optional listener (bot.js DMs the customer from it).
+let orderListener = null;
+function setOrderListener(fn) { orderListener = fn; }
+
 async function updateOrderStatus(orderId, status, extra = {}) {
+  let before = null, after = null;
   await updateCollectionAtomic('orders', (orders) => {
     if (!orders[orderId]) return;
-    orders[orderId] = { ...orders[orderId], status, ...extra };
+    before = { status: orders[orderId].status, refundStatus: orders[orderId].refundStatus || '' };
+    const history = Array.isArray(orders[orderId].statusHistory) ? orders[orderId].statusHistory.slice(-20) : [];
+    const refundStatus = extra.refundStatus !== undefined ? extra.refundStatus : (orders[orderId].refundStatus || '');
+    if (before.status !== status || before.refundStatus !== refundStatus) {
+      history.push({ status, refundStatus: refundStatus || undefined, at: Date.now() });
+    }
+    orders[orderId] = { ...orders[orderId], status, ...extra, statusHistory: history };
+    after = orders[orderId];
   });
+  if (orderListener && before && after && (before.status !== status || before.refundStatus !== (after.refundStatus || ''))) {
+    try { Promise.resolve(orderListener({ ...after, id: orderId }, before)).catch(() => {}); } catch (e) {}
+  }
 }
 
 async function getOrder(orderId) {
@@ -508,6 +524,9 @@ async function requestRefund(orderId, reason) {
     orders[orderId].refundStatus = 'requested';
     orders[orderId].refundReason = reason || '';
     orders[orderId].refundRequestedAt = Date.now();
+    const h = Array.isArray(orders[orderId].statusHistory) ? orders[orderId].statusHistory.slice(-20) : [];
+    h.push({ status: orders[orderId].status, refundStatus: 'requested', at: Date.now() });
+    orders[orderId].statusHistory = h;
   });
 }
 
@@ -573,7 +592,7 @@ async function processReferralBonus(buyerTelegramId, orderAmount) {
 
 // ================= PRO PLAN / VIP =================
 
-// ================= PAYMENT SETTINGS (FamPay) =================
+// ================= PAYMENT SETTINGS (PayX) =================
 // Lets the admin override the .env values from inside the bot — the .env
 // values are used as the initial defaults on first run.
 
@@ -581,10 +600,10 @@ async function getPaymentSettings() {
   const s = readCollection('paymentSettings');
   if (Object.keys(s).length) return s;
   return {
-    apiKey: process.env.FAMPAY_API_KEY || '',
-    baseUrl: process.env.FAMPAY_BASE_URL || 'https://payment-getaway-bot-production.up.railway.app',
+    apiKey: process.env.PAYX_API_KEY || '',
+    baseUrl: process.env.PAYX_BASE_URL || 'https://payx-q1nn.onrender.com',
     upiId: process.env.FAMPAY_UPI_ID || '',
-    termsAndConditions: '📜 *Payment Terms & Conditions*\n\n1. Payment is non-refundable once the product is delivered.\n2. Verification may take up to 30 seconds after you submit your UTR.\n3. Do not close this chat until you receive confirmation.\n4. In case of a failed payment, contact support with your UTR number.'
+    termsAndConditions: '📜 *Payment Terms & Conditions*\n\n1. Payment is non-refundable once the product is delivered.\n2. Verification is automatic and may take up to 30 seconds after you pay.\n3. Do not close this chat until you receive confirmation.\n4. In case of a failed payment, contact support with your UTR number.'
   };
 }
 
@@ -592,10 +611,10 @@ async function updatePaymentSettings(updates) {
   return updateCollectionAtomic('paymentSettings', (current) => {
     const hasData = Object.keys(current).length > 0;
     const base = hasData ? current : {
-      apiKey: process.env.FAMPAY_API_KEY || '',
-      baseUrl: process.env.FAMPAY_BASE_URL || 'https://payment-getaway-bot-production.up.railway.app',
+      apiKey: process.env.PAYX_API_KEY || '',
+      baseUrl: process.env.PAYX_BASE_URL || 'https://payx-q1nn.onrender.com',
       upiId: process.env.FAMPAY_UPI_ID || '',
-      termsAndConditions: '📜 *Payment Terms & Conditions*\n\n1. Payment is non-refundable once the product is delivered.\n2. Verification may take up to 30 seconds after you submit your UTR.\n3. Do not close this chat until you receive confirmation.\n4. In case of a failed payment, contact support with your UTR number.'
+      termsAndConditions: '📜 *Payment Terms & Conditions*\n\n1. Payment is non-refundable once the product is delivered.\n2. Verification is automatic and may take up to 30 seconds after you pay.\n3. Do not close this chat until you receive confirmation.\n4. In case of a failed payment, contact support with your UTR number.'
     };
     const merged = { ...base, ...updates };
     return { __replaceWith: merged, __value: merged };
@@ -1120,6 +1139,7 @@ async function getStaffPermissions(telegramId) {
 }
 
 module.exports = {
+  setOrderListener,
   getUser,
   createUserIfNotExists,
   getUserByReferralCode,
