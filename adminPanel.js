@@ -756,174 +756,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.reply('📦 *Add Product*\n\nStep 1/8 — Product name?', { parse_mode: 'Markdown' });
   });
 
-  // ============ PER-FIELD PRODUCT EDIT MENU ============
-  // Tap "Edit" on a product -> menu where every field (name, category, price,
-  // description, stock, file, link, photos) is changed on its own. The old
-  // step-by-step wizard is still available as "Full Edit".
-
-  async function sendProductEditMenu(ctx, productId, note) {
-    const p = await fb.getProduct(productId);
-    if (!p) return ctx.reply('⚠️ Product nahi mila.');
-    const owner = await isOwner(ctx);
-    const imgs = (Array.isArray(p.imageFileIds) && p.imageFileIds.length) ? p.imageFileIds.length : (p.imageFileId ? 1 : 0);
-    const delivery = p.deliveryType === 'file'
-      ? (p.fileId ? '📎 Delivery: File set ✅' : '📎 Delivery: File missing ⚠️')
-      : (p.deliveryLink ? `🔗 Delivery: ${mdEscape(String(p.deliveryLink).slice(0, 60))}` : '🔗 Delivery: Link missing ⚠️');
-    let text = `${note ? note + '\n\n' : ''}✏️ *Edit Product*\n\n📦 *${mdEscape(p.name)}*\n💰 Price: ₹${p.price}\n📁 Category: ${mdEscape(p.category || '-')}\n📦 Stock: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n${delivery}\n🖼 Photos: ${imgs}\n\nKya change karna hai? Ek ek cheez alag se edit karo 👇`;
-    if (!owner) text += '\n\n_Edit ke baad product owner approval ke liye wapas jayega._';
-    const id = productId;
-    const rows = [
-      [Markup.button.callback('✏️ Edit Name', `admin_pe_name_${id}`), Markup.button.callback('📁 Edit Category', `admin_pe_cat_${id}`)],
-      [Markup.button.callback('💰 Edit Price', `admin_pe_price_${id}`), Markup.button.callback('📝 Edit Description', `admin_pe_desc_${id}`)],
-      [Markup.button.callback('📦 Edit Stock', `admin_pe_stock_${id}`), Markup.button.callback('🖼 Edit Photos', `admin_pe_photos_${id}`)],
-      [Markup.button.callback('📎 Edit File', `admin_pe_file_${id}`), Markup.button.callback('🔗 Edit Link', `admin_pe_link_${id}`)],
-      [Markup.button.callback('👁 Show File', `admin_pe_showfile_${id}`), Markup.button.callback('🖼 Show Photos', `admin_pe_showphotos_${id}`)],
-      [Markup.button.callback('🧙 Full Edit (step by step)', `admin_editprodfull_${id}`)],
-      [Markup.button.callback('⬅️ Back', `admin_prod_${id}`)]
-    ];
-    return ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) });
-  }
-
-  // Saves one edited field. Owner: applied instantly. Staff: product goes back to owner approval.
-  async function applyProductEdit(ctx, productId, updates, label) {
-    const existing = await fb.getProduct(productId);
-    if (!existing) { delete adminState[ctx.from.id]; await ctx.reply('⚠️ Product nahi mila.'); return false; }
-    const owner = await isOwner(ctx);
-    if (!owner && !staffCanEdit(ctx, existing)) {
-      delete adminState[ctx.from.id];
-      await ctx.reply('⛔ Aap is product ko edit nahi kar sakte.');
-      return false;
-    }
-    if (owner) {
-      await fb.updateProduct(productId, updates);
-    } else {
-      const upd = await fb.updateProduct(productId, { ...updates, active: false, approvalStatus: 'pending', resubmittedAt: Date.now() });
-      await notifyOwnersOfSubmission(productId, upd, true);
-    }
-    delete adminState[ctx.from.id];
-    await sendProductEditMenu(ctx, productId, `✅ ${label} updated${owner ? '' : '\n⏳ Owner ke approval ke baad hi live hoga.'}`);
-    return true;
-  }
-
   bot.action(/^admin_editprod_(.+)$/, async (ctx) => {
-    if (!(await needPerm(ctx, 'products'))) return;
-    const productId = ctx.match[1];
-    const p = await fb.getProduct(productId);
-    if (!p) return ctx.answerCbQuery('Not found.');
-    if (!canManageProduct(ctx, p)) return ctx.answerCbQuery('⛔ Approved product sirf owner edit kar sakta hai.', { show_alert: true });
-    await ctx.answerCbQuery();
-    delete adminState[ctx.from.id];
-    await sendProductEditMenu(ctx, productId);
-  });
-
-  bot.action(/^admin_pe_cancel_(.+)$/, async (ctx) => {
-    if (!(await needPerm(ctx, 'products'))) return;
-    await ctx.answerCbQuery('Cancelled');
-    delete adminState[ctx.from.id];
-    await sendProductEditMenu(ctx, ctx.match[1], '❌ Cancelled.');
-  });
-
-  bot.action(/^admin_pe_(name|cat|price|desc|stock|file|link|photos|showfile|showphotos)_(.+)$/, async (ctx) => {
-    if (!(await needPerm(ctx, 'products'))) return;
-    const field = ctx.match[1];
-    const productId = ctx.match[2];
-    const p = await fb.getProduct(productId);
-    if (!p) return ctx.answerCbQuery('Not found.');
-    if (!canManageProduct(ctx, p)) return ctx.answerCbQuery('⛔ Approved product sirf owner edit kar sakta hai.', { show_alert: true });
-    await ctx.answerCbQuery();
-
-    // ---- view-only buttons ----
-    if (field === 'showfile') {
-      if (p.deliveryType === 'file' && p.fileId) {
-        try { await bot.telegram.sendDocument(ctx.from.id, p.fileId, { caption: `📎 Current file — ${p.name}` }); }
-        catch (e) { await ctx.reply('⚠️ File bhej nahi paya (file_id invalid ho sakta hai). Naya file upload karo.'); }
-      } else if (p.deliveryType === 'link' && p.deliveryLink) {
-        await ctx.reply(`🔗 Current link:\n${p.deliveryLink}`, { disable_web_page_preview: true });
-      } else {
-        await ctx.reply('⚠️ Is product mein abhi koi file/link set nahi hai.');
-      }
-      return;
-    }
-    if (field === 'showphotos') {
-      const ids = ((Array.isArray(p.imageFileIds) && p.imageFileIds.length) ? p.imageFileIds : [p.imageFileId]).filter(Boolean);
-      if (!ids.length) return ctx.reply('🖼 Is product mein abhi koi photo nahi hai.');
-      try {
-        if (ids.length === 1) await bot.telegram.sendPhoto(ctx.from.id, ids[0], { caption: `🖼 ${p.name}` });
-        else await bot.telegram.sendMediaGroup(ctx.from.id, ids.slice(0, 10).map(id => ({ type: 'photo', media: id })));
-      } catch (e) { await ctx.reply('⚠️ Photos bhej nahi paya. Naye photos upload karo.'); }
-      return;
-    }
-
-    // ---- edit buttons: remember which field is being edited ----
-    const cancelKb = Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', `admin_pe_cancel_${productId}`)]]);
-    const prompts = {
-      name: ['pedit_name', `✏️ *Edit Name*\nAbhi: ${mdEscape(p.name)}\n\nNaya naam bhejo:`],
-      cat: ['pedit_category', `📁 *Edit Category*\nAbhi: ${mdEscape(p.category || '-')}\n\nNayi category bhejo:`],
-      price: ['pedit_price', `💰 *Edit Price*\nAbhi: ₹${p.price}\n\nNaya price bhejo (₹, 0 = free):`],
-      desc: ['pedit_desc', `📝 *Edit Description*\nAbhi: ${mdEscape(p.description || '-')}\n\nNayi description bhejo (ya \`-\` bhejo description hatane ke liye):`],
-      stock: ['pedit_stock', `📦 *Edit Stock*\nAbhi: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n\nNaya stock number bhejo (-1 = unlimited):`],
-      file: ['pedit_file', `📎 *Edit File*\nNayi delivery FILE (as document) bhejo. Purani file replace ho jayegi.`],
-      link: ['pedit_link', `🔗 *Edit Link*\nAbhi: ${p.deliveryType === 'link' && p.deliveryLink ? mdEscape(p.deliveryLink) : '-'}\n\nNaya download link (URL) bhejo:`],
-      photos: ['pedit_photos', `🖼 *Edit Photos*\nNayi photo(s) bhejo — ek ya album. Purani saari photos replace ho jayengi.\n\nSabhi photos hatane ke liye \`remove\` likho.`]
-    };
-    const [step, text] = prompts[field];
-    adminState[ctx.from.id] = { step, data: { productId } };
-    await ctx.reply(text, { parse_mode: 'Markdown', ...cancelKb });
-  });
-
-  async function handleProductEditText(ctx, state, text) {
-    const productId = state.data.productId;
-    if (text.toLowerCase() === 'cancel') {
-      delete adminState[ctx.from.id];
-      await sendProductEditMenu(ctx, productId, '❌ Cancelled.');
-      return true;
-    }
-    switch (state.step) {
-      case 'pedit_name':
-        if (!text || text.length > 100) { await ctx.reply('⚠️ Naam 1-100 characters ka hona chahiye.'); return true; }
-        await applyProductEdit(ctx, productId, { name: text }, 'Name');
-        return true;
-      case 'pedit_category':
-        if (!text || text.length > 50) { await ctx.reply('⚠️ Category 1-50 characters ki honi chahiye.'); return true; }
-        await applyProductEdit(ctx, productId, { category: text }, 'Category');
-        return true;
-      case 'pedit_price': {
-        const price = parseInt(text, 10);
-        if (isNaN(price) || price < 0) { await ctx.reply('⚠️ Valid number daalo (0 ya usse zyada).'); return true; }
-        const cur = await fb.getProduct(productId);
-        await applyProductEdit(ctx, productId, { price, referToUnlock: price === 0 ? ((cur && cur.referToUnlock) || 0) : 0 }, 'Price');
-        return true;
-      }
-      case 'pedit_desc':
-        await applyProductEdit(ctx, productId, { description: text === '-' ? '' : text }, 'Description');
-        return true;
-      case 'pedit_stock': {
-        const stock = parseInt(text, 10);
-        if (isNaN(stock) || stock < -1) { await ctx.reply('⚠️ Valid number daalo (-1 = unlimited).'); return true; }
-        await applyProductEdit(ctx, productId, { stock }, 'Stock');
-        return true;
-      }
-      case 'pedit_link':
-        if (!/^https?:\/\//i.test(text)) { await ctx.reply('⚠️ Valid link bhejo (http:// ya https:// se shuru hona chahiye).'); return true; }
-        await applyProductEdit(ctx, productId, { deliveryType: 'link', deliveryLink: text, fileId: '' }, 'Link');
-        return true;
-      case 'pedit_file':
-        await ctx.reply('⚠️ File ko *document* ki tarah bhejo (text nahi). Ya `cancel` likho.', { parse_mode: 'Markdown' });
-        return true;
-      case 'pedit_photos':
-        if (text.toLowerCase() === 'remove') {
-          await applyProductEdit(ctx, productId, { imageUrl: '', imageFileId: null, imageFileIds: null }, 'Photos (removed)');
-          return true;
-        }
-        await ctx.reply('⚠️ Photo bhejo, ya `remove` / `cancel` likho.', { parse_mode: 'Markdown' });
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  // Full step-by-step wizard (old behaviour)
-  bot.action(/^admin_editprodfull_(.+)$/, async (ctx) => {
     if (!(await needPerm(ctx, 'products'))) return;
     const productId = ctx.match[1];
     const p = await fb.getProduct(productId);
@@ -1826,11 +1659,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
     const text = ctx.message.text.trim();
 
-    // ---- Per-field product edit ----
-    if (state.step && state.step.startsWith('pedit_')) {
-      return handleProductEditText(ctx, state, text);
-    }
-
     // ---- Product add/edit wizard ----
     if (state.step && state.step.startsWith('prod_')) {
       return handleProductWizard(ctx, state, text);
@@ -2410,11 +2238,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const state = adminState[ctx.from.id];
     if (!state) return false;
 
-    if (state.step === 'pedit_file') {
-      await applyProductEdit(ctx, state.data.productId, { deliveryType: 'file', fileId: ctx.message.document.file_id, deliveryLink: '' }, 'File');
-      return true;
-    }
-
     if (state.step === 'prod_deliveryvalue' && state.data.deliveryType === 'file') {
       state.data.fileId = ctx.message.document.file_id;
       state.step = 'prod_image';
@@ -2444,21 +2267,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const sizes = ctx.message.photo;
     const fileId = sizes[sizes.length - 1].file_id;
     const mediaGroupId = ctx.message.media_group_id || null;
-
-    if (state.step === 'pedit_photos') {
-      // Same album handling as the add-product wizard: collect photos, apply once.
-      if (!state.data.photoIds) state.data.photoIds = [];
-      state.data.photoIds.push(fileId);
-      const apply = async () => {
-        if (adminState[ctx.from.id] !== state) return; // cancelled / already applied
-        const ids = state.data.photoIds.slice(0, 10);
-        await applyProductEdit(ctx, state.data.productId, { imageUrl: '', imageFileId: ids[0], imageFileIds: ids }, ids.length > 1 ? `Photos (${ids.length})` : 'Photo');
-      };
-      if (!mediaGroupId) { await apply(); return true; }
-      if (state.data._peTimer) clearTimeout(state.data._peTimer);
-      state.data._peTimer = setTimeout(() => { apply().catch(e => console.error('pedit photos error:', e.message)); }, 1200);
-      return true;
-    }
 
     if (state.step === 'prod_image') {
       // Telegram's multi-select photo picker sends each photo as a SEPARATE

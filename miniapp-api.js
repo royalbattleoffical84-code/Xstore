@@ -536,8 +536,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       out.push({
         id: o.id, kind, productId: o.productId, name: o.productName, amount: o.amount, status: o.status,
         createdAt: o.createdAt, method: o.paymentMethod, refundStatus: o.refundStatus || '',
-        deliveryType, link, productExists,
-        history: (Array.isArray(o.statusHistory) ? o.statusHistory : []).map(h => ({ status: h.status, refundStatus: h.refundStatus || '', at: h.at }))
+        deliveryType, link, productExists
       });
     }
     res.json({ ok: true, orders: out });

@@ -12,12 +12,10 @@ const ui = require('./ui');
 // ---- Persistent storage: restore data from Supabase/Firebase BEFORE serving anything ----
 // (Render's disk is wiped on every deploy; see storage.js). Everything that reads
 // or writes data waits for this promise.
-let storageIsReady = false;
 const storageReady = fb.init({
   // a newer deploy took over: stop polling Telegram so it can't write any more
   onReplaced: async () => { try { bot.stop('replaced'); } catch (e) {} }
 });
-storageReady.then(() => { storageIsReady = true; }).catch(() => {});
 storageReady.catch((err) => {
   console.error('❌ Storage restore failed — refusing to start on empty data (Render will retry):', err && err.message);
   process.exit(1);
@@ -2207,46 +2205,14 @@ bot.action('closepopup', async (ctx) => {
   try { await ctx.deleteMessage(); } catch (e) {}
 });
 
-
-// ============ ORDER NOTIFICATIONS ============
-// Every order status/refund change (from the bot, the Mini App or the admin panel) lands here.
-// Payment-success + delivery already send their own messages, so we only DM the rest.
-fb.setOrderListener(async (order, before) => {
-  const uid = order.userId;
-  if (!uid || order.isWalletTopup && order.status !== 'failed') return;
-  let text = null;
-  if (order.status === 'refunded' && before.status !== 'refunded') {
-    text = `✅ Refund approved\n\nOrder: ${order.productName}\nAmount: ₹${order.amount}\n\nThe amount has been returned. Thank you for your patience! 🙏`;
-  } else if (order.refundStatus === 'rejected' && before.refundStatus !== 'rejected') {
-    text = `❌ Refund request declined\n\nOrder: ${order.productName}\n\nIf you think this is a mistake, please contact support.`;
-  } else if (order.refundStatus === 'requested' && before.refundStatus !== 'requested') {
-    text = `📨 Refund request received\n\nOrder: ${order.productName}\nWe'll update you here as soon as it is reviewed.`;
-  } else if (order.status === 'failed' && before.status === 'pending' && !order.cancelledByUser) {
-    text = `⚠️ Payment not completed\n\nOrder: ${order.productName}\nAmount: ₹${order.amount}\n\nThe payment failed or timed out. If money was deducted, contact support with this order ID: ${order.id}`;
-  }
-  if (!text) return;
-  try { await bot.telegram.sendMessage(uid, text); } catch (e) { /* user blocked the bot */ }
-});
-
 // ============ START SERVERS ============
-
-// Gate data routes until storage is restored (see below)
-app.use((req, res, next) => {
-  if (storageIsReady || !(req.path.startsWith('/api/') || req.path.startsWith('/admin-api/'))) return next();
-  res.set('Access-Control-Allow-Origin', '*');
-  return res.status(503).json({ ok: false, code: 'STARTING', error: 'Server is starting, please wait' });
-});
 
 // Telegram Mini App (serves /app + /api/mini/*)
 setupMiniApp(app, bot, fb, fampay, { checkAndProcessOrder, checkAndAlertLowStock });
 
 const PORT = process.env.PORT || 3000;
 // Open the port only after data is restored, so nothing is served from empty data
-// Open the port IMMEDIATELY (Render/Telegram need a live port), but keep data routes
-// answering 503 "STARTING" until the database is restored, so nothing is served from empty
-// data and the Mini App shows "waking up" + auto-retries instead of hanging on the splash.
-app.get('/health', (req, res) => res.json({ ok: true, ready: storageIsReady }));
-app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`));
+storageReady.then(() => app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`))).catch(() => {});
 
 // ============ GLOBAL ERROR HANDLER ============
 // Without this, any unhandled error in a handler (bad data, network blip,

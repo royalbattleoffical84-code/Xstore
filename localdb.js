@@ -454,27 +454,11 @@ async function createOrder(orderData) {
   return order;
 }
 
-// Order tracking + notifications: every status/refund change is appended to the order's
-// timeline and passed to an optional listener (bot.js DMs the customer from it).
-let orderListener = null;
-function setOrderListener(fn) { orderListener = fn; }
-
 async function updateOrderStatus(orderId, status, extra = {}) {
-  let before = null, after = null;
   await updateCollectionAtomic('orders', (orders) => {
     if (!orders[orderId]) return;
-    before = { status: orders[orderId].status, refundStatus: orders[orderId].refundStatus || '' };
-    const history = Array.isArray(orders[orderId].statusHistory) ? orders[orderId].statusHistory.slice(-20) : [];
-    const refundStatus = extra.refundStatus !== undefined ? extra.refundStatus : (orders[orderId].refundStatus || '');
-    if (before.status !== status || before.refundStatus !== refundStatus) {
-      history.push({ status, refundStatus: refundStatus || undefined, at: Date.now() });
-    }
-    orders[orderId] = { ...orders[orderId], status, ...extra, statusHistory: history };
-    after = orders[orderId];
+    orders[orderId] = { ...orders[orderId], status, ...extra };
   });
-  if (orderListener && before && after && (before.status !== status || before.refundStatus !== (after.refundStatus || ''))) {
-    try { Promise.resolve(orderListener({ ...after, id: orderId }, before)).catch(() => {}); } catch (e) {}
-  }
 }
 
 async function getOrder(orderId) {
@@ -524,9 +508,6 @@ async function requestRefund(orderId, reason) {
     orders[orderId].refundStatus = 'requested';
     orders[orderId].refundReason = reason || '';
     orders[orderId].refundRequestedAt = Date.now();
-    const h = Array.isArray(orders[orderId].statusHistory) ? orders[orderId].statusHistory.slice(-20) : [];
-    h.push({ status: orders[orderId].status, refundStatus: 'requested', at: Date.now() });
-    orders[orderId].statusHistory = h;
   });
 }
 
@@ -1139,7 +1120,6 @@ async function getStaffPermissions(telegramId) {
 }
 
 module.exports = {
-  setOrderListener,
   getUser,
   createUserIfNotExists,
   getUserByReferralCode,
