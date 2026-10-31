@@ -7,8 +7,6 @@
 
 const { Markup } = require('telegraf');
 const ui = require('./ui');
-const { productFiles, productImages, fileFields, imageFields, hasDelivery, sendFiles } = require('./productmedia');
-const fampay = require('./fampay');
 
 function setupAdminPanel(bot, fb, mdEscape) {
   const adminState = {}; // { telegramId: { step, data } } — separate from user-facing userState
@@ -54,17 +52,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     return _botUser || '';
   }
 
-  // How a product's refer-lock is shown:  N = its own lock · "off" = switched off · default = the global setting
-  const lockLabel = (p, def) => (p.referToUnlock > 0 ? `🔒 ${p.referToUnlock}` : p.referToUnlock === -1 ? 'no lock' : (def > 0 ? `🔒 ${def} (default)` : 'no lock'));
-  // admin input -> stored value:  "default" -> null · 0 -> -1 (explicitly off) · 1..100 -> N · else undefined (invalid)
-  function parseLockInput(text) {
-    const t = String(text).trim().toLowerCase();
-    if (t === 'default' || t === 'd') return null;
-    const n = parseInt(t, 10);
-    if (isNaN(n) || n < 0 || n > 100 || String(n) !== t) return undefined;
-    return n === 0 ? -1 : n;
-  }
-
   const ownerIds = () => (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
   // ---- Product approval helpers (staff submissions need owner approval) ----
@@ -89,13 +76,13 @@ function setupAdminPanel(bot, fb, mdEscape) {
       if (p.approvalStatus === 'pending') {
         rows.push([Markup.button.callback('✅ Approve', `admin_approveprod_${id}`), Markup.button.callback('❌ Reject', `admin_rejectprod_${id}`)]);
       }
-      rows.push([Markup.button.callback('⚙️ Manage Product', `admin_mg_${id}`)]);
+      rows.push([Markup.button.callback('✏️ Edit', `admin_editprod_${id}`)]);
       if (p.approvalStatus !== 'pending') rows.push([Markup.button.callback(p.active ? '🙈 Hide' : '✅ Show', `admin_toggleprod_${id}`)]);
       rows.push([Markup.button.callback('🔗 Get Share Link', `admin_prodlink_${id}`)]);
       rows.push([Markup.button.callback('🗑 Delete', `admin_delprod_${id}`)]);
     } else {
       if (p.approvalStatus !== 'approved') {
-        rows.push([Markup.button.callback('⚙️ Manage Product', `admin_mg_${id}`)]);
+        rows.push([Markup.button.callback('✏️ Edit & Resubmit', `admin_editprod_${id}`)]);
         rows.push([Markup.button.callback('🗑 Delete', `admin_delprod_${id}`)]);
       } else {
         rows.push([Markup.button.callback('🔗 Get Share Link', `admin_prodlink_${id}`)]);
@@ -124,7 +111,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
       try {
         if (image) await bot.telegram.sendPhoto(owner, image, { caption, parse_mode: 'Markdown', ...kb });
         else await bot.telegram.sendMessage(owner, caption, { parse_mode: 'Markdown', ...kb });
-        if (p.deliveryType === 'file') await sendFiles((fid, extra) => bot.telegram.sendDocument(owner, fid, extra), p, `📎 Delivery file(s) for "${p.name}" (review)`);
+        if (p.deliveryType === 'file' && p.fileId) await bot.telegram.sendDocument(owner, p.fileId, { caption: `📎 Delivery file for "${p.name}" (review)` });
       } catch (e) { console.error('Approval notify failed for owner', owner, e.message); }
     }
   }
@@ -156,8 +143,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
       rows.push([Markup.button.callback('👑 Pro Plan', 'admin_proplan'), Markup.button.callback('🎯 Check-in', 'admin_checkin')]);
       rows.push([Markup.button.callback('📊 Sales Report', 'admin_report'), Markup.button.callback('🏆 Leaderboard', 'admin_leaderboard')]);
       rows.push([Markup.button.callback('🧑‍💼 Staff', 'admin_staff'), Markup.button.callback('🧩 Features', 'admin_features')]);
-      rows.push([Markup.button.callback('👨‍💻 Developers', 'admin_developers'), Markup.button.callback('📂 Categories', 'admin_cats')]);
-      rows.push([Markup.button.callback('💾 Backup Data', 'admin_backup')]);
+      rows.push([Markup.button.callback('👨‍💻 Developers', 'admin_developers'), Markup.button.callback('💾 Backup Data', 'admin_backup')]);
     } else {
       const perms = await fb.getStaffPermissions(ctx.from.id);
       const open = (perm) => perms.includes(perm) && !(perm === 'gift' && !cfg.giftEnabled);
@@ -506,12 +492,12 @@ function setupAdminPanel(bot, fb, mdEscape) {
       giftedBy: String(ctx.from.id),
       giftedByName: fromLabel,
       giftedByRole: owner ? 'owner' : 'staff',
-      productSnapshot: { deliveryType: p.deliveryType, fileId: p.fileId || null, fileIds: productFiles(p).map(f => f.id), deliveryLink: p.deliveryLink || null }
+      productSnapshot: { deliveryType: p.deliveryType, fileId: p.fileId || null, deliveryLink: p.deliveryLink || null }
     });
 
     try {
-      if (p.deliveryType === 'file' && productFiles(p).length) {
-        await sendFiles((fid, extra) => bot.telegram.sendDocument(targetId, fid, extra), p, ui.giftPlain({ name: p.name, from: fromLabel }));
+      if (p.deliveryType === 'file' && p.fileId) {
+        await bot.telegram.sendDocument(targetId, p.fileId, { caption: ui.giftPlain({ name: p.name, from: fromLabel }) });
       } else if (p.deliveryType === 'link' && p.deliveryLink) {
         await bot.telegram.sendMessage(targetId, ui.giftPlain({ name: p.name, from: fromLabel, link: p.deliveryLink }));
       } else {
@@ -605,8 +591,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const list = (await productsFor(ctx)).filter(([, p]) => p.price === 0);
     let text = `${ui.banner('🔗 REFER-LOCK', '✦ FREE PRODUCTS ✦')}\n\nFree product ko unlock karne ke liye user ko friends refer karne padte hain.\n\n`;
     text += list.length ? 'Product chuno:' : '_Koi FREE product nahi hai. Refer-lock sirf free products par lagta hai._';
-    const defN = (await fb.getReferralSettings()).freeProductLock;
-    const rows = list.slice(0, 25).map(([id, p]) => [Markup.button.callback(`${p.name.slice(0, 26)} · ${lockLabel(p, defN)}`, `admin_rlset_${id}`)]);
+    const rows = list.slice(0, 25).map(([id, p]) => [Markup.button.callback(`${p.name.slice(0, 26)} · ${p.referToUnlock > 0 ? '🔒 ' + p.referToUnlock : 'no lock'}`, `admin_rlset_${id}`)]);
     rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
     catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
@@ -618,8 +603,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (!p || p.price !== 0 || !(await ownsProduct(ctx, p))) return ctx.answerCbQuery('⛔ Not allowed.', { show_alert: true });
     await ctx.answerCbQuery();
     adminState[ctx.from.id] = { step: 'rl_edit', data: { productId: ctx.match[1] } };
-    const defN = (await fb.getReferralSettings()).freeProductLock;
-    await ctx.reply(`🔒 *${mdEscape(p.name)}*\nAbhi: ${lockLabel(p, defN)}\n\nKitne referrals chahiye? Number likho (1-100).\n• \`0\` = is product par lock nahi\n• \`default\` = global setting (${defN || 'off'})`, { parse_mode: 'Markdown' });
+    await ctx.reply(`🔒 *${mdEscape(p.name)}*\nAbhi: ${p.referToUnlock > 0 ? p.referToUnlock + ' referrals' : 'koi lock nahi'}\n\nKitne referrals chahiye? (0 = lock hatao, max 100)`, { parse_mode: 'Markdown' });
   });
 
   // ---- 🔗 Share Links ----
@@ -673,420 +657,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.answerCbQuery();
     const cfg = await fb.getStaffSettings();
     await ctx.reply(`Step 3/5 — Discount type? Reply "flat" (₹ amount) ya "percent" (max ${cfg.couponMaxPercent}%)`, Markup.keyboard(['flat', 'percent']).oneTime().resize());
-  });
-
-
-  // One short status message after a burst of uploads (an album = several messages)
-  function queueStatus(ctx, state, textFn, kb) {
-    if (state.data._stTimer) clearTimeout(state.data._stTimer);
-    state.data._stTimer = setTimeout(() => {
-      Promise.resolve(ctx.reply(textFn(), { parse_mode: 'Markdown', ...kb })).catch(() => {});
-    }, 700);
-  }
-
-  async function askPhotos(ctx, state) {
-    const cur = productImages(state.data).length;
-    await ctx.reply(`Step 8/8 — Product *photos* bhejo (ek ya zyada, max 10). Sab bhejne ke baad *✅ Done* dabao.${state.data.isEdit ? `\n\nAbhi ${cur} photo hai — nayi photo bhejoge to purani replace ho jayengi. "skip" = purani rakho.` : ''}`, {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([[Markup.button.callback(state.data.isEdit ? '⏭ Skip (purani rakho)' : '⏭ Skip (photo nahi)', 'admin_pidone')]])
-    });
-  }
-
-  // wizard buttons
-  bot.action('admin_pfdone', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
-    const st = adminState[ctx.from.id];
-    if (!st || st.step !== 'prod_deliveryvalue' || !(st.data.files || []).length) return ctx.answerCbQuery('Pehle kam se kam 1 file bhejo.', { show_alert: true });
-    if (st.data._stTimer) clearTimeout(st.data._stTimer);
-    await ctx.answerCbQuery('✅');
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-    st.step = 'prod_image';
-    await askPhotos(ctx, st);
-  });
-  bot.action('admin_pidone', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
-    const st = adminState[ctx.from.id];
-    if (!st || st.step !== 'prod_image') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
-    if (st.data._stTimer) clearTimeout(st.data._stTimer);
-    await ctx.answerCbQuery('✅');
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-    await finalizeProduct(ctx, st);
-  });
-
-
-  // ---- refer-to-unlock step of the wizard (free products) ----
-  async function askRefer(ctx, state) {
-    const defN = (await fb.getReferralSettings()).freeProductLock;
-    const cur = state.data.isEdit ? `\nAbhi: ${lockLabel(state.data, defN)}` : '';
-    await ctx.reply(`🔒 *Refer-to-Unlock*: is FREE product ko lene ke liye user ko kitne friends refer karne honge?${cur}\n\nNeeche se chuno ya number likho (1-100).`, {
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback(`⚙️ Default (${defN || 'off'})`, 'admin_prefer_default'), Markup.button.callback('🔓 No lock', 'admin_prefer_off')],
-        [1, 2, 3, 5].map(n => Markup.button.callback(`${n}`, `admin_prefer_${n}`))
-      ])
-    });
-  }
-  async function afterRefer(ctx, state) {
-    state.step = 'prod_deliverytype';
-    await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
-  }
-  bot.action(/^admin_prefer_(default|off|\d+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
-    const st = adminState[ctx.from.id];
-    if (!st || st.step !== 'prod_refer') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
-    const v = ctx.match[1] === 'default' ? null : ctx.match[1] === 'off' ? -1 : parseInt(ctx.match[1], 10);
-    st.data.referToUnlock = v;
-    await ctx.answerCbQuery('✅');
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-    await afterRefer(ctx, st);
-  });
-
-  // ============================================================
-  // 📂 CATEGORIES — the owner manages them; everyone picks from buttons
-  // ============================================================
-  async function categoryRows(prefix) {
-    const cats = await fb.getProductCategories();
-    return chunk(cats.map(c => Markup.button.callback(c.name.slice(0, 28), `${prefix}_${c.id}`)), 2);
-  }
-  async function askCategory(ctx, state) {
-    const owner = await isOwner(ctx);
-    const cats = await fb.getProductCategories();
-    const rows = await categoryRows('admin_pcat');
-    if (owner) rows.push([Markup.button.callback('➕ New Category', 'admin_pcatnew')]);
-    if (state.data.isEdit) rows.push([Markup.button.callback(`⏭ Keep "${String(state.data.category || '').slice(0, 20)}"`, 'admin_pcatkeep')]);
-    let text = `Step 3/8 — *Category chuno*${state.data.isEdit ? ` (abhi: ${mdEscape(state.data.category || '-')})` : ''}`;
-    if (!cats.length) text += owner ? '\n\n_Abhi koi category nahi hai — ➕ New Category dabao._' : '\n\n_Abhi koi category nahi hai. Owner se category banwao._';
-    await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows.length ? rows : [[Markup.button.callback('⬅️ Back', 'admin_home')]]) });
-  }
-  async function afterCategory(ctx, state) {
-    state.step = 'prod_description';
-    await ctx.reply('Step 4/8 — Description? (or "skip")');
-  }
-  // typed category name: the owner may create a new one, staff must match an existing one
-  async function resolveCategory(ctx, text) {
-    const name = text.trim();
-    const found = (await fb.getProductCategories()).find(c => c.name.toLowerCase() === name.toLowerCase());
-    if (found) return found;
-    if (await isOwner(ctx) && name.length >= 1 && name.length <= 40) return fb.createProductCategory(name);
-    return null;
-  }
-  bot.action(/^admin_pcat_(pc_[a-z0-9]+)$/, async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
-    const st = adminState[ctx.from.id];
-    if (!st || st.step !== 'prod_category') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
-    const cat = (await fb.getProductCategories()).find(c => c.id === ctx.match[1]);
-    if (!cat) return ctx.answerCbQuery('Category nahi mili.', { show_alert: true });
-    st.data.category = cat.name;
-    await ctx.answerCbQuery('✅ ' + cat.name);
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-    await ctx.reply(`📁 Category: *${mdEscape(cat.name)}*`, { parse_mode: 'Markdown' });
-    await afterCategory(ctx, st);
-  });
-  bot.action('admin_pcatkeep', async (ctx) => {
-    if (!(await isAdminOrStaff(ctx))) return;
-    const st = adminState[ctx.from.id];
-    if (!st || st.step !== 'prod_category') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
-    await ctx.answerCbQuery('✅');
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-    await afterCategory(ctx, st);
-  });
-  bot.action('admin_pcatnew', async (ctx) => {
-    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Nayi category sirf owner bana sakta hai.', { show_alert: true });
-    const st = adminState[ctx.from.id];
-    if (!st || st.step !== 'prod_category') return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
-    await ctx.answerCbQuery();
-    st.step = 'prod_category_new';
-    await ctx.reply('➕ Nayi category ka naam bhejo:');
-  });
-
-  // ---- Manage Product → change category with buttons ----
-  bot.action(/^admin_mgcat_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    const id = ctx.match[1];
-    const rows = await categoryRows(`admin_mgcatset_${id}`);
-    if (await isOwner(ctx)) rows.push([Markup.button.callback('➕ New Category', `admin_mgcatnew_${id}`)]);
-    rows.push([Markup.button.callback('⬅️ Back', `admin_mg_${id}`)]);
-    await show(ctx, `📁 *Category chuno*\nAbhi: *${mdEscape(p.category || '-')}*`, Markup.inlineKeyboard(rows));
-  });
-  bot.action(/^admin_mgcatset_(.+)_(pc_[a-z0-9]+)$/, async (ctx) => {
-    const id = ctx.match[1];
-    const p = await mgProduct(ctx, id); if (!p) return;
-    const cat = (await fb.getProductCategories()).find(c => c.id === ctx.match[2]);
-    if (!cat) return ctx.answerCbQuery('Category nahi mili.', { show_alert: true });
-    await fb.updateProduct(id, { category: cat.name });
-    await afterManageEdit(ctx, id);
-    await ctx.answerCbQuery('✅ ' + cat.name);
-    await sendManage(ctx, id);
-  });
-  bot.action(/^admin_mgcatnew_(.+)$/, async (ctx) => {
-    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Nayi category sirf owner bana sakta hai.', { show_alert: true });
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'mg_catnew', data: { productId: ctx.match[1] } };
-    await ctx.reply('➕ Nayi category ka naam bhejo (product ko isi mein daal denge):');
-  });
-
-  // ---- Admin Panel → 📂 Categories (owner) ----
-  async function sendCats(ctx) {
-    const [cats, prods] = await Promise.all([fb.getProductCategories(), fb.getAllProducts(false)]);
-    const cnt = (n) => Object.values(prods).filter(p => p.category === n).length;
-    let text = `${ui.banner('📂 CATEGORIES', '✦ PRODUCT CATEGORIES ✦')}\n\n`;
-    text += cats.length ? cats.map(c => `📁 ${mdEscape(c.name)} — ${cnt(c.name)} product${cnt(c.name) === 1 ? '' : 's'}`).join('\n') : '_Abhi koi category nahi. Add karo!_';
-    text += '\n\n_Product add karte waqt in categories ke buttons milte hain. Staff sirf inhi mein se chun sakta hai._';
-    const rows = [[Markup.button.callback('➕ Add Category', 'admin_catadd')]];
-    cats.forEach(c => rows.push([Markup.button.callback(`📁 ${c.name.slice(0, 26)} (${cnt(c.name)})`, `admin_cat_${c.id}`)]));
-    rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
-    await show(ctx, text, Markup.inlineKeyboard(rows));
-  }
-  bot.action('admin_cats', async (ctx) => { if (!(await isOwner(ctx))) return; await ctx.answerCbQuery(); delete adminState[ctx.from.id]; await sendCats(ctx); });
-  bot.action('admin_catadd', async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'cat_add', data: {} };
-    await ctx.reply('➕ Nayi category ka naam bhejo (emoji ke saath bhi chalega):');
-  });
-  async function sendCat(ctx, id) {
-    const c = (await fb.getProductCategories()).find(x => x.id === id);
-    if (!c) return ctx.reply('Category nahi mili.');
-    const n = Object.values(await fb.getAllProducts(false)).filter(p => p.category === c.name).length;
-    await show(ctx, `${ui.banner('📁 CATEGORY', `✦ ${c.name} ✦`.slice(0, 40))}\n\n📦 Products: *${n}*\n\n_Delete karne par is category ke products "Other" mein chale jayenge. Kisi ek product ki category badalni ho to Products → product → Manage → Edit Category._`, Markup.inlineKeyboard([
-      [Markup.button.callback('✏️ Rename', `admin_catren_${id}`), Markup.button.callback('🗑 Delete', `admin_catdel_${id}`)],
-      [Markup.button.callback('⬅️ Back', 'admin_cats')]
-    ]));
-  }
-  bot.action(/^admin_cat_(pc_[a-z0-9]+)$/, async (ctx) => { if (!(await isOwner(ctx))) return; await ctx.answerCbQuery(); await sendCat(ctx, ctx.match[1]); });
-  bot.action(/^admin_catren_(pc_[a-z0-9]+)$/, async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'cat_rename', data: { id: ctx.match[1] } };
-    await ctx.reply('✏️ Category ka naya naam bhejo (is category ke saare products ka naam bhi badal jayega):');
-  });
-  bot.action(/^admin_catdel_(pc_[a-z0-9]+)$/, async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery();
-    await ctx.reply('⚠️ Category delete karni hai? Is ke products "Other" category mein chale jayenge.', Markup.inlineKeyboard([[
-      Markup.button.callback('🗑 Haan, delete', `admin_catdelok_${ctx.match[1]}`), Markup.button.callback('❌ Nahi', `admin_cat_${ctx.match[1]}`)
-    ]]));
-  });
-  bot.action(/^admin_catdelok_(pc_[a-z0-9]+)$/, async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    const r = await fb.deleteProductCategory(ctx.match[1]);
-    if (r.error === 'other_in_use') return ctx.answerCbQuery(`"Other" mein ${r.count} products hain — pehle unki category badlo.`, { show_alert: true });
-    await ctx.answerCbQuery('🗑 Deleted');
-    if (r.moved) await ctx.reply(`📦 ${r.moved} product${r.moved > 1 ? 's' : ''} "Other" category mein move ho gaye.`);
-    await sendCats(ctx);
-  });
-
-  // ============================================================
-  // ⚙️ MANAGE PRODUCT  — change one thing at a time (no full re-edit)
-  // ============================================================
-  // Staff can only manage their own products until the owner approves them; their edits go back to the owner.
-  async function mgProduct(ctx, id) {
-    if (!(await needPerm(ctx, 'products'))) return null;
-    const p = await fb.getProduct(id);
-    if (!p) { await ctx.answerCbQuery('Product not found.'); return null; }
-    if (!canManageProduct(ctx, p)) { await ctx.answerCbQuery('⛔ Approved product sirf owner manage kar sakta hai.', { show_alert: true }); return null; }
-    return p;
-  }
-  async function mgProductText(ctx, id) {   // same checks for typed replies
-    if (!(await hasPerm(ctx, 'products'))) return null;
-    const p = await fb.getProduct(id);
-    return p && canManageProduct(ctx, p) ? p : null;
-  }
-  // a staff edit sends the product back to the owner (once; later edits just update the pending one)
-  async function afterManageEdit(ctx, id) {
-    if (await isOwner(ctx)) return;
-    const p = await fb.getProduct(id);
-    if (!p || p.approvalStatus === 'pending') return;
-    const upd = await fb.updateProduct(id, { active: false, approvalStatus: 'pending', resubmittedAt: Date.now() });
-    await notifyOwnersOfSubmission(id, upd, true);
-  }
-
-  async function sendManage(ctx, id) {
-    const p = await fb.getProduct(id);
-    if (!p) return ctx.reply('Product nahi mila.');
-    const owner = await isOwner(ctx);
-    const files = productFiles(p), imgs = productImages(p);
-    const delivery = p.deliveryType === 'link' ? `🔗 Link: ${p.deliveryLink ? mdEscape(p.deliveryLink.slice(0, 40)) : 'not set'}` : `📎 Files: ${files.length}`;
-    const text = `${ui.banner('⚙️ MANAGE PRODUCT', `✦ ${p.name} ✦`.slice(0, 40))}\n\n` +
-      `💰 Price: ${p.price === 0 ? 'FREE' : '₹' + p.price}${p.price === 0 ? ` · ${lockLabel(p, (await fb.getReferralSettings()).freeProductLock)}` : ''}\n📁 Category: ${mdEscape(p.category || '-')}\n📦 Stock: ${p.stock === -1 || p.stock === undefined ? 'Unlimited' : p.stock}\n` +
-      `🖼 Photos: ${imgs.length}\n${delivery}\n${productStatusLine(p)}\n\nKya badalna hai? Neeche se ek option chuno:`;
-    const rows = [
-      [Markup.button.callback('✏️ Edit Name', `admin_mgf_name_${id}`), Markup.button.callback('💰 Edit Price', `admin_mgf_price_${id}`)],
-      [Markup.button.callback('📁 Edit Category', `admin_mgcat_${id}`), Markup.button.callback('📝 Edit Description', `admin_mgf_desc_${id}`)],
-      [Markup.button.callback('📦 Edit Stock', `admin_mgf_stock_${id}`), ...(p.price === 0 ? [Markup.button.callback('🔒 Refer-Lock', `admin_mgf_refer_${id}`)] : [])],
-      [Markup.button.callback(`🖼 Photos (${imgs.length})`, `admin_mgph_${id}`), Markup.button.callback(p.deliveryType === 'link' ? '🔗 Link / Files' : `📎 Files (${files.length})`, `admin_mgfl_${id}`)],
-    ];
-    if (owner && p.approvalStatus !== 'pending') rows.push([Markup.button.callback(p.active ? '🙈 Hide from store' : '✅ Show in store', `admin_toggleprod_${id}`)]);
-    rows.push([Markup.button.callback('🔁 Full Edit (sab steps)', `admin_editprod_${id}`)]);
-    rows.push([Markup.button.callback('⬅️ Back', `admin_prod_${id}`)]);
-    await show(ctx, text, Markup.inlineKeyboard(rows));
-  }
-  async function show(ctx, text, kb) {
-    try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...kb }); }
-    catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...kb }); }
-  }
-
-  bot.action(/^admin_mg_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    delete adminState[ctx.from.id];
-    await sendManage(ctx, ctx.match[1]);
-  });
-
-  // ---- single-field edits ----
-  const MG_PROMPTS = {
-    name: '✏️ Naya *naam* bhejo:',
-    price: '💰 Nayi *price* bhejo (₹ number, 0 = FREE):',
-    cat: '📁 Nayi *category* bhejo:',
-    desc: '📝 Nayi *description* bhejo:',
-    stock: '📦 Naya *stock* bhejo (-1 = unlimited):',
-    refer: '🔒 Kitne *referrals* chahiye? Number (1-100), `0` = lock nahi, `default` = global setting.',
-    link: '🔗 Naya *download link* bhejo:'
-  };
-  bot.action(/^admin_mgf_(name|price|desc|stock|refer|link)_(.+)$/, async (ctx) => {
-    const field = ctx.match[1], id = ctx.match[2];
-    const p = await mgProduct(ctx, id); if (!p) return;
-    if (field === 'refer' && p.price !== 0) return ctx.answerCbQuery('Refer-lock sirf FREE product par lagta hai.', { show_alert: true });
-    if (field === 'link' && p.deliveryType !== 'link') return ctx.answerCbQuery('Yeh product link delivery nahi hai.', { show_alert: true });
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: `mg_${field}`, data: { productId: id } };
-    await ctx.reply(MG_PROMPTS[field], { parse_mode: 'Markdown' });
-  });
-
-  // ---- 🖼 photos ----
-  async function sendPhotoMgr(ctx, id) {
-    const p = await fb.getProduct(id); if (!p) return;
-    const imgs = productImages(p);
-    const text = `${ui.banner('🖼 PHOTOS', `✦ ${p.name} ✦`.slice(0, 40))}\n\n${imgs.length ? `Abhi *${imgs.length}* photo${imgs.length > 1 ? 's' : ''} hai.` : '_Abhi koi photo nahi._'}\n\n_Max 10 photos._`;
-    const rows = [[Markup.button.callback('➕ Add Photos', `admin_mgphadd_${id}`), ...(imgs.length ? [Markup.button.callback('👁 Show Photos', `admin_mgphshow_${id}`)] : [])]];
-    for (let i = 0; i < imgs.length; i += 4) rows.push(imgs.slice(i, i + 4).map((_, k) => Markup.button.callback(`🗑 #${i + k + 1}`, `admin_mgphdel_${id}_${i + k}`)));
-    if (imgs.length) rows.push([Markup.button.callback('🗑 Delete All Photos', `admin_mgphall_${id}`)]);
-    rows.push([Markup.button.callback('⬅️ Back', `admin_mg_${id}`)]);
-    await show(ctx, text, Markup.inlineKeyboard(rows));
-  }
-  bot.action(/^admin_mgph_(.+)$/, async (ctx) => { const p = await mgProduct(ctx, ctx.match[1]); if (!p) return; await ctx.answerCbQuery(); delete adminState[ctx.from.id]; await sendPhotoMgr(ctx, ctx.match[1]); });
-  bot.action(/^admin_mgphshow_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    const imgs = productImages(p);
-    if (!imgs.length) return ctx.answerCbQuery('Koi photo nahi hai.', { show_alert: true });
-    await ctx.answerCbQuery();
-    try {
-      if (imgs.length === 1) await bot.telegram.sendPhoto(ctx.chat ? ctx.chat.id : ctx.from.id, imgs[0], { caption: '#1' });
-      else await bot.telegram.sendMediaGroup(ctx.chat ? ctx.chat.id : ctx.from.id, imgs.map((m, i) => ({ type: 'photo', media: m, caption: `#${i + 1}` })));
-    } catch (e) { await ctx.reply('⚠️ Photos dikha nahi paya: ' + e.message); }
-  });
-  bot.action(/^admin_mgphdel_(.+)_(\d+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    const imgs = productImages(p), i = parseInt(ctx.match[2], 10);
-    if (i >= imgs.length) return ctx.answerCbQuery('Photo nahi mili.');
-    await fb.updateProduct(ctx.match[1], imageFields(imgs.filter((_, k) => k !== i)));
-    await afterManageEdit(ctx, ctx.match[1]);
-    await ctx.answerCbQuery(`🗑 Photo #${i + 1} delete`);
-    await sendPhotoMgr(ctx, ctx.match[1]);
-  });
-  bot.action(/^admin_mgphall_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    await ctx.reply('⚠️ Saari photos delete karni hain?', Markup.inlineKeyboard([[Markup.button.callback('🗑 Haan, sab delete', `admin_mgphallok_${ctx.match[1]}`), Markup.button.callback('❌ Nahi', `admin_mgph_${ctx.match[1]}`)]]));
-  });
-  bot.action(/^admin_mgphallok_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await fb.updateProduct(ctx.match[1], imageFields([]));
-    await afterManageEdit(ctx, ctx.match[1]);
-    await ctx.answerCbQuery('🗑 Deleted');
-    await sendPhotoMgr(ctx, ctx.match[1]);
-  });
-  bot.action(/^admin_mgphadd_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    if (productImages(p).length >= 10) return ctx.answerCbQuery('Max 10 photos ho chuki hain.', { show_alert: true });
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'mg_photos', data: { productId: ctx.match[1], newPhotos: [] } };
-    await ctx.reply('🖼 Nayi photos bhejo (ek ya zyada). Sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown' });
-  });
-
-  // ---- 📎 files / link ----
-  async function sendFileMgr(ctx, id) {
-    const p = await fb.getProduct(id); if (!p) return;
-    const files = productFiles(p);
-    let text = `${ui.banner('📎 DELIVERY', `✦ ${p.name} ✦`.slice(0, 40))}\n\n`;
-    const rows = [];
-    if (p.deliveryType === 'link') {
-      text += `Delivery: *🔗 Link*\n${p.deliveryLink ? mdEscape(p.deliveryLink) : '_not set_'}`;
-      rows.push([Markup.button.callback('✏️ Edit Link', `admin_mgf_link_${id}`)]);
-      rows.push([Markup.button.callback('📎 Switch to Files', `admin_mgflswfile_${id}`)]);
-    } else {
-      text += `Delivery: *📎 Files* (${files.length})\n\n${files.map((f, i) => `${i + 1}. ${mdEscape(f.name || 'file')}${f.size ? ` (${Math.max(1, Math.round(f.size / 1024))} KB)` : ''}`).join('\n') || '_koi file nahi_'}\n\n_Customer ko saari files milti hain._`;
-      rows.push([Markup.button.callback('➕ Add Another File', `admin_mgfladd_${id}`), ...(files.length ? [Markup.button.callback('👁 Show Files', `admin_mgflshow_${id}`)] : [])]);
-      for (let i = 0; i < files.length; i += 4) rows.push(files.slice(i, i + 4).map((_, k) => Markup.button.callback(`🗑 #${i + k + 1}`, `admin_mgfldel_${id}_${i + k}`)));
-      rows.push([Markup.button.callback('🔗 Switch to Link', `admin_mgflswlink_${id}`)]);
-    }
-    rows.push([Markup.button.callback('⬅️ Back', `admin_mg_${id}`)]);
-    await show(ctx, text, Markup.inlineKeyboard(rows));
-  }
-  bot.action(/^admin_mgfl_(.+)$/, async (ctx) => { const p = await mgProduct(ctx, ctx.match[1]); if (!p) return; await ctx.answerCbQuery(); delete adminState[ctx.from.id]; await sendFileMgr(ctx, ctx.match[1]); });
-  bot.action(/^admin_mgflshow_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    const files = productFiles(p);
-    if (!files.length) return ctx.answerCbQuery('Koi file nahi hai.', { show_alert: true });
-    await ctx.answerCbQuery();
-    try { await sendFiles((fid, extra) => bot.telegram.sendDocument(ctx.chat ? ctx.chat.id : ctx.from.id, fid, extra), p, `📎 ${p.name} — ${files.length} file${files.length > 1 ? 's' : ''}`); }
-    catch (e) { await ctx.reply('⚠️ Files dikha nahi paya: ' + e.message); }
-  });
-  bot.action(/^admin_mgfldel_(.+)_(\d+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    const files = productFiles(p), i = parseInt(ctx.match[2], 10);
-    if (i >= files.length) return ctx.answerCbQuery('File nahi mili.');
-    if (files.length <= 1) return ctx.answerCbQuery('Kam se kam 1 file zaroori hai. Pehle nayi file add karo, phir purani delete karo.', { show_alert: true });
-    await fb.updateProduct(ctx.match[1], fileFields(files.filter((_, k) => k !== i)));
-    await afterManageEdit(ctx, ctx.match[1]);
-    await ctx.answerCbQuery(`🗑 File #${i + 1} delete`);
-    await sendFileMgr(ctx, ctx.match[1]);
-  });
-  bot.action(/^admin_mgfladd_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'mg_files', data: { productId: ctx.match[1], newFiles: [], replaceAll: false } };
-    await ctx.reply('📎 Nayi file(s) bhejo (document ke roop mein). Sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown' });
-  });
-  bot.action(/^admin_mgflswfile_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'mg_files', data: { productId: ctx.match[1], newFiles: [], replaceAll: true } };
-    await ctx.reply('📎 File(s) bhejo — product ab *files* se deliver hoga (link hat jayega). Sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown' });
-  });
-  bot.action(/^admin_mgflswlink_(.+)$/, async (ctx) => {
-    const p = await mgProduct(ctx, ctx.match[1]); if (!p) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'mg_swlink', data: { productId: ctx.match[1] } };
-    await ctx.reply('🔗 Download link bhejo — product ab *link* se deliver hoga (files hat jayengi):', { parse_mode: 'Markdown' });
-  });
-
-  // ✅ Done after adding photos / files in Manage
-  bot.action('admin_mgdone', async (ctx) => {
-    const st = adminState[ctx.from.id];
-    if (!st || !['mg_photos', 'mg_files'].includes(st.step)) return ctx.answerCbQuery('Session expire ho gaya.', { show_alert: true });
-    const id = st.data.productId;
-    const p = await mgProduct(ctx, id); if (!p) return;
-    if (st.data._stTimer) clearTimeout(st.data._stTimer);
-    if (st.step === 'mg_photos') {
-      if (!st.data.newPhotos.length) return ctx.answerCbQuery('Pehle kam se kam 1 photo bhejo.', { show_alert: true });
-      await fb.updateProduct(id, imageFields([...productImages(p), ...st.data.newPhotos].slice(0, 10)));
-      await afterManageEdit(ctx, id);
-      delete adminState[ctx.from.id];
-      await ctx.answerCbQuery('✅ Photos add ho gayi');
-      try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-      return sendPhotoMgr(ctx, id);
-    }
-    if (!st.data.newFiles.length) return ctx.answerCbQuery('Pehle kam se kam 1 file bhejo.', { show_alert: true });
-    const base = (p.deliveryType === 'file' && !st.data.replaceAll) ? productFiles(p) : [];
-    await fb.updateProduct(id, { deliveryType: 'file', deliveryLink: '', ...fileFields([...base, ...st.data.newFiles]) });
-    await afterManageEdit(ctx, id);
-    delete adminState[ctx.from.id];
-    await ctx.answerCbQuery('✅ Files add ho gayi');
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
-    return sendFileMgr(ctx, id);
   });
 
   // ---- Approve / reject staff-submitted products (owner only) ----
@@ -1550,16 +1120,9 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.answerCbQuery();
     const settings = await fb.getReferralSettings();
     await ctx.reply(
-      `🔗 *Referral Settings*\n\nBonus Type: ${settings.bonusType}\nBonus Amount: ${settings.bonusType === 'percent' ? settings.bonusAmount + '%' : '₹' + settings.bonusAmount}\n\n🔒 *Free product lock:* ${settings.freeProductLock > 0 ? settings.freeProductLock + ' referral' + (settings.freeProductLock > 1 ? 's' : '') : 'OFF'}\n_Har FREE product (jiska apna lock set nahi) lene ke liye user ko itne friends refer karne padte hain. 0 = free products sabke liye khule._`,
-      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('✏️ Edit Bonus', 'admin_editreferral')], [Markup.button.callback('🔒 Free Product Lock', 'admin_freelock')], [Markup.button.callback('⬅️ Back', 'admin_home')]]) }
+      `🔗 *Referral Settings*\n\nBonus Type: ${settings.bonusType}\nBonus Amount: ${settings.bonusType === 'percent' ? settings.bonusAmount + '%' : '₹' + settings.bonusAmount}`,
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('✏️ Edit', 'admin_editreferral')], [Markup.button.callback('⬅️ Back', 'admin_home')]]) }
     );
-  });
-
-  bot.action('admin_freelock', async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'awaiting_free_lock', data: {} };
-    await ctx.reply('🔒 Har FREE product ke liye kitne referrals chahiye? Number bhejo (0 = sab free products sabke liye khule, max 100).');
   });
 
   bot.action('admin_editreferral', async (ctx) => {
@@ -1666,21 +1229,10 @@ function setupAdminPanel(bot, fb, mdEscape) {
   async function sendPaymentSettingsMenu(ctx) {
     const s = await fb.getPaymentSettings();
     const maskedKey = s.apiKey ? s.apiKey.slice(0, 12) + '...' + s.apiKey.slice(-4) : 'not set';
-    const gw = String(s.gateway || process.env.PAYMENT_GATEWAY || 'zapupi').toLowerCase();
-    const pxUrl = s.payxUrl || process.env.PAYX_URL || '';
-    const pxKey = s.payxKey || process.env.PAYX_API_KEY || '';
-    const maskedPx = pxKey ? pxKey.slice(0, 8) + '...' + pxKey.slice(-4) : 'not set';
-    const cfgOk = s.payxCfg && s.payxCfg.statusPath;
-    const text = `${ui.banner('💳 PAYMENT SETTINGS', '✦ GATEWAY ✦')}\n\n` +
-      `🟢 *Active gateway: ${gw === 'payx' ? 'PayX' : 'ZapUPI'}*\n\n` +
-      `*PayX*\n🌐 URL: ${pxUrl ? mdEscape(pxUrl) : 'not set'}\n🔑 Key: \`${maskedPx}\`\n🔎 Connection: ${cfgOk ? `✅ verified (${mdEscape(s.payxCfg.createPath)})` : '⚠️ not tested yet'}\n\n` +
-      `*ZapUPI*\n🔑 API Key: \`${maskedKey}\`\n🌐 Base URL: ${mdEscape(s.baseUrl)}\n💰 UPI ID: \`${s.upiId || 'not set'}\`\n📜 T&C: ${s.termsAndConditions ? 'set' : 'not set'}`;
+    const text = `💳 *Payment Settings (FamPay)*\n\n🔑 API Key: \`${maskedKey}\`\n🌐 Base URL: ${mdEscape(s.baseUrl)}\n💰 UPI ID: \`${s.upiId || 'not set'}\`\n📜 T&C: ${s.termsAndConditions ? 'set' : 'not set'}`;
 
     const buttons = Markup.inlineKeyboard([
-      [Markup.button.callback('🧪 Test & Activate PayX', 'admin_payxtest')],
-      [Markup.button.callback('🔗 PayX URL', 'admin_payxurl'), Markup.button.callback('🔑 PayX Key', 'admin_payxkey')],
-      ...(gw === 'payx' ? [[Markup.button.callback('↩️ Switch back to ZapUPI', 'admin_gwzap')]] : []),
-      [Markup.button.callback('🔑 Edit ZapUPI API Key', 'admin_editfamkey')],
+      [Markup.button.callback('🔑 Edit API Key', 'admin_editfamkey')],
       [Markup.button.callback('🌐 Edit Base URL', 'admin_editfamurl')],
       [Markup.button.callback('💰 Edit UPI ID', 'admin_editfamupi')],
       [Markup.button.callback('📜 Edit Terms & Conditions', 'admin_editfamtc')],
@@ -1690,46 +1242,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...buttons }); }
     catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...buttons }); }
   }
-
-  // ---- PayX gateway ----
-  bot.action('admin_payxurl', async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'awaiting_payx_url' };
-    await ctx.reply('🔗 PayX backend ka URL bhejo (jaise https://my-getway-xxxx.onrender.com):');
-  });
-  bot.action('admin_payxkey', async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery();
-    adminState[ctx.from.id] = { step: 'awaiting_payx_key' };
-    await ctx.reply('🔑 PayX API key bhejo (px_live_...). Save hote hi aapka message delete kar diya jayega.');
-  });
-  bot.action('admin_gwzap', async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await fb.updatePaymentSettings({ gateway: 'zapupi' });
-    await ctx.answerCbQuery('✅ ZapUPI active');
-    await sendPaymentSettingsMenu(ctx);
-  });
-  // Detects the right endpoints with a ₹1 test order, saves them and switches the bot to PayX
-  bot.action('admin_payxtest', async (ctx) => {
-    if (!(await isOwner(ctx))) return;
-    await ctx.answerCbQuery('Test chal raha hai...');
-    const wait = await ctx.reply('🧪 PayX connection test ho raha hai (Render server soya ho to 30-40 sec lag sakte hain)...');
-    const s = await fb.getPaymentSettings();
-    let res;
-    try { res = await fampay.discoverPayx(s); } catch (e) { res = { ok: false, notes: [e.message] }; }
-    try { await ctx.telegram.deleteMessage(ctx.chat.id, wait.message_id); } catch (e) {}
-    if (!res.ok) {
-      await ctx.reply(`❌ PayX connect nahi hua\n\n${(res.notes || []).map(n => '• ' + n).join('\n')}\n\nZapUPI abhi bhi active hai, kuch nahi bigda.`);
-      return;
-    }
-    await fb.updatePaymentSettings({ payxCfg: res.cfg, gateway: 'payx' });
-    const sm = res.sample || {};
-    await ctx.reply(
-      `✅ PayX connect ho gaya aur ACTIVE hai!\n\n📍 Create: ${res.cfg.createPath}\n🔐 Auth: ${res.cfg.authMode}\n📊 Status: ${res.cfg.statusMethod} ${res.cfg.statusPath}\n🧾 Test order: ${sm.id || '-'} · amount ${sm.amount !== null && sm.amount !== undefined ? '₹' + sm.amount : '?'}\n${sm.url ? '🔗 ' + sm.url : ''}\n\n⚠️ Test order ₹1 ka tha — amount upar ₹1 dikhe to sahi hai (agar 100 ya 0.01 dikhe to bata dena).`,
-      { disable_web_page_preview: true });
-    await sendPaymentSettingsMenu(ctx);
-  });
 
   bot.action('admin_editfamkey', async (ctx) => {
     if (!(await isOwner(ctx))) return;
@@ -2340,25 +1852,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
 
     // ---- Payment Settings (FamPay) ----
-    if (state.step === 'awaiting_payx_url') {
-      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
-      if (!/^https?:\/\/[^\s]+$/i.test(text)) { await ctx.reply('⚠️ Sahi URL bhejo (https://...).'); return true; }
-      await fb.updatePaymentSettings({ payxUrl: text.replace(/\/+$/, ''), payxCfg: null });
-      delete adminState[ctx.from.id];
-      await ctx.reply('✅ PayX URL save ho gaya. Ab "🧪 Test & Activate PayX" dabao.');
-      await sendPaymentSettingsMenu(ctx);
-      return true;
-    }
-    if (state.step === 'awaiting_payx_key') {
-      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
-      if (text.length < 10 || /\s/.test(text)) { await ctx.reply('⚠️ Sahi API key bhejo (px_live_...).'); return true; }
-      await fb.updatePaymentSettings({ payxKey: text, payxCfg: null });
-      try { await ctx.deleteMessage(); } catch (e) {}   // don't leave the key sitting in the chat
-      delete adminState[ctx.from.id];
-      await ctx.reply('✅ PayX key save ho gayi (aapka message delete kar diya). Ab "🧪 Test & Activate PayX" dabao.');
-      await sendPaymentSettingsMenu(ctx);
-      return true;
-    }
     if (state.step === 'awaiting_fam_apikey') {
       await fb.updatePaymentSettings({ apiKey: text });
       delete adminState[ctx.from.id];
@@ -2423,77 +1916,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
 
     // ---- Add staff ----
-    if (state.step && state.step.startsWith('mg_')) {
-      const id = state.data.productId;
-      const p = await mgProductText(ctx, id);
-      if (!p) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed ya product nahi mila.'); return true; }
-
-      if (state.step === 'mg_photos' || state.step === 'mg_files') {
-        if (/^\/?done$/i.test(text)) {   // typing "done" works like the button
-          const n = state.step === 'mg_photos' ? state.data.newPhotos.length : state.data.newFiles.length;
-          if (!n) { await ctx.reply('⚠️ Pehle kuch bhejo.'); return true; }
-          if (state.data._stTimer) clearTimeout(state.data._stTimer);
-          if (state.step === 'mg_photos') {
-            await fb.updateProduct(id, imageFields([...productImages(p), ...state.data.newPhotos].slice(0, 10)));
-            await afterManageEdit(ctx, id); delete adminState[ctx.from.id];
-            await ctx.reply('✅ Photos add ho gayi.'); await sendPhotoMgr(ctx, id);
-          } else {
-            const base = (p.deliveryType === 'file' && !state.data.replaceAll) ? productFiles(p) : [];
-            await fb.updateProduct(id, { deliveryType: 'file', deliveryLink: '', ...fileFields([...base, ...state.data.newFiles]) });
-            await afterManageEdit(ctx, id); delete adminState[ctx.from.id];
-            await ctx.reply('✅ Files add ho gayi.'); await sendFileMgr(ctx, id);
-          }
-          return true;
-        }
-        await ctx.reply(state.step === 'mg_photos' ? '🖼 Photos bhejo, ya *✅ Done* dabao.' : '📎 Files bhejo, ya *✅ Done* dabao.', { parse_mode: 'Markdown' });
-        return true;
-      }
-
-      const finish = async (patch, msg) => {
-        await fb.updateProduct(id, patch);
-        await afterManageEdit(ctx, id);
-        delete adminState[ctx.from.id];
-        await ctx.reply(msg);
-        await sendManage(ctx, id);
-        return true;
-      };
-      if (state.step === 'mg_name') {
-        if (text.length < 2 || text.length > 100) { await ctx.reply('⚠️ Naam 2 se 100 characters ka ho.'); return true; }
-        return finish({ name: text }, '✅ Naam update ho gaya.');
-      }
-      if (state.step === 'mg_price') {
-        const n = parseInt(text, 10);
-        if (isNaN(n) || n < 0 || n > 1000000) { await ctx.reply('⚠️ 0 ya usse bada number daalo.'); return true; }
-        return finish({ price: n, referToUnlock: n === 0 ? (p.referToUnlock === undefined ? null : p.referToUnlock) : null }, `✅ Price update: ${n === 0 ? 'FREE' : '₹' + n}`);
-      }
-      if (state.step === 'mg_catnew') {
-        if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Nayi category sirf owner bana sakta hai.'); return true; }
-        if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category naam 1 se 40 characters ka ho.'); return true; }
-        const cat = await fb.createProductCategory(text);
-        return finish({ category: cat.name }, `✅ Category: ${cat.name}`);
-      }
-      if (state.step === 'mg_desc') {
-        if (text.length > 800) { await ctx.reply('⚠️ Description max 800 characters.'); return true; }
-        return finish({ description: text }, '✅ Description update ho gayi.');
-      }
-      if (state.step === 'mg_stock') {
-        const n = parseInt(text, 10);
-        if (isNaN(n) || n < -1 || n > 1000000) { await ctx.reply('⚠️ Number daalo (-1 = unlimited).'); return true; }
-        return finish({ stock: n }, `✅ Stock update: ${n === -1 ? 'Unlimited' : n}`);
-      }
-      if (state.step === 'mg_refer') {
-        const v = parseLockInput(text);
-        if (p.price !== 0 || v === undefined) { await ctx.reply('⚠️ 1-100 number, `0` ya `default` likho (sirf FREE product ke liye).', { parse_mode: 'Markdown' }); return true; }
-        return finish({ referToUnlock: v }, v > 0 ? `✅ Ab ${v} referrals chahiye.` : v === -1 ? '✅ Lock hata diya.' : '✅ Global setting use hogi.');
-      }
-      if (state.step === 'mg_link' || state.step === 'mg_swlink') {
-        if (!/^https?:\/\/\S+$/i.test(text)) { await ctx.reply('⚠️ Sahi link bhejo (https://...).'); return true; }
-        const patch = state.step === 'mg_swlink' ? { deliveryType: 'link', deliveryLink: text, ...fileFields([]) } : { deliveryLink: text };
-        return finish(patch, '✅ Link update ho gaya.');
-      }
-      return false;
-    }
-
     if (state.step === 'stock_edit') {
       const p = await fb.getProduct(state.data.productId);
       if (!p || !(await ownsProduct(ctx, p)) || !(await hasPerm(ctx, 'stock'))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed.'); return true; }
@@ -2508,11 +1930,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (state.step === 'rl_edit') {
       const p = await fb.getProduct(state.data.productId);
       if (!p || p.price !== 0 || !(await ownsProduct(ctx, p)) || !(await hasPerm(ctx, 'referlock'))) { delete adminState[ctx.from.id]; await ctx.reply('⛔ Not allowed.'); return true; }
-      const v = parseLockInput(text);
-      if (v === undefined) { await ctx.reply('⚠️ 1-100 number, `0` ya `default` likho.', { parse_mode: 'Markdown' }); return true; }
-      await fb.updateProduct(state.data.productId, { referToUnlock: v });
+      const n = parseInt(text, 10);
+      if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
+      await fb.updateProduct(state.data.productId, { referToUnlock: n });
       delete adminState[ctx.from.id];
-      await ctx.reply(`✅ *${mdEscape(p.name)}*: ${v > 0 ? `ab ${v} referrals chahiye` : v === -1 ? 'lock hata diya' : 'global setting use hogi'}`, { parse_mode: 'Markdown', ...adminBackButton('admin_referlock') });
+      await ctx.reply(`✅ *${mdEscape(p.name)}*: ${n > 0 ? `ab ${n} referrals chahiye` : 'lock hata diya'}`, { parse_mode: 'Markdown', ...adminBackButton('admin_referlock') });
       return true;
     }
 
@@ -2575,33 +1997,6 @@ function setupAdminPanel(bot, fb, mdEscape) {
       state.data.bonusType = type;
       state.step = 'referral_amount';
       await ctx.reply(`Bonus amount? (${type === 'flat' ? '₹' : '%'})`, Markup.removeKeyboard());
-      return true;
-    }
-    if (state.step === 'cat_add' || state.step === 'cat_rename') {
-      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
-      if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category naam 1 se 40 characters ka ho.'); return true; }
-      if (state.step === 'cat_add') {
-        const dup = (await fb.getProductCategories()).some(c => c.name.toLowerCase() === text.toLowerCase());
-        if (dup) { await ctx.reply('⚠️ Yeh category pehle se hai.'); return true; }
-        await fb.createProductCategory(text);
-        delete adminState[ctx.from.id];
-        await ctx.reply('✅ Category add ho gayi.');
-      } else {
-        const r = await fb.renameProductCategory(state.data.id, text);
-        if (r && r.error === 'exists') { await ctx.reply('⚠️ Is naam ki category pehle se hai.'); return true; }
-        delete adminState[ctx.from.id];
-        await ctx.reply('✅ Category rename ho gayi (products ka naam bhi badal gaya).');
-      }
-      await sendCats(ctx);
-      return true;
-    }
-    if (state.step === 'awaiting_free_lock') {
-      if (!(await isOwner(ctx))) { delete adminState[ctx.from.id]; return true; }
-      const n = parseInt(text, 10);
-      if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
-      await fb.setReferralSettings({ freeProductLock: n });
-      delete adminState[ctx.from.id];
-      await ctx.reply(n ? `✅ Ab har FREE product ke liye ${n} referral${n > 1 ? 's' : ''} chahiye (jinka apna lock set nahi).` : '✅ Free product lock band — free products sabke liye khule hain.');
       return true;
     }
     if (state.step === 'referral_amount') {
@@ -2707,28 +2102,15 @@ function setupAdminPanel(bot, fb, mdEscape) {
           state.data.price = price;
         }
         state.step = 'prod_category';
-        await askCategory(ctx, state);
+        await ctx.reply(`Step 3/8 — Category?${state.data.isEdit ? ` Current: ${state.data.category}` : ''}`);
         return true;
       }
 
-      case 'prod_category': {
-        if (skip) { await afterCategory(ctx, state); return true; }
-        const picked = await resolveCategory(ctx, text);
-        if (!picked) { await ctx.reply('⚠️ Category list mein nahi hai — neeche ke buttons se chuno.'); await askCategory(ctx, state); return true; }
-        state.data.category = picked.name;
-        await afterCategory(ctx, state);
+      case 'prod_category':
+        if (!skip) state.data.category = text;
+        state.step = 'prod_description';
+        await ctx.reply('Step 4/8 — Description? (or "skip")');
         return true;
-      }
-
-      case 'prod_category_new': {
-        if (!(await isOwner(ctx))) { await ctx.reply('⛔ Nayi category sirf owner bana sakta hai.'); await askCategory(ctx, state); state.step = 'prod_category'; return true; }
-        if (text.length < 1 || text.length > 40) { await ctx.reply('⚠️ Category naam 1 se 40 characters ka ho.'); return true; }
-        const cat = await fb.createProductCategory(text);
-        state.data.category = cat.name;
-        await ctx.reply(`✅ Category: *${mdEscape(cat.name)}*`, { parse_mode: 'Markdown' });
-        await afterCategory(ctx, state);
-        return true;
-      }
 
       case 'prod_description':
         if (text.toLowerCase() !== 'skip') state.data.description = text;
@@ -2743,10 +2125,10 @@ function setupAdminPanel(bot, fb, mdEscape) {
         }
         if (state.data.price === 0) {
           state.step = 'prod_refer';
-          await askRefer(ctx, state);
+          await ctx.reply(`🔒 Refer-to-Unlock: is FREE product ko lene ke liye user ko kitne friends refer karne honge? (0 = koi lock nahi, max 100)${state.data.isEdit ? ` Current: ${state.data.referToUnlock || 0}` : ''}`, Markup.removeKeyboard());
           return true;
         }
-        state.data.referToUnlock = null;
+        state.data.referToUnlock = 0;
         state.step = 'prod_deliverytype';
         await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
         return true;
@@ -2754,11 +2136,12 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
       case 'prod_refer': {
         if (!skip) {
-          const v = parseLockInput(text);
-          if (v === undefined) { await ctx.reply('⚠️ 1-100 number, `0` (lock nahi) ya `default` likho.', { parse_mode: 'Markdown' }); return true; }
-          state.data.referToUnlock = v;
+          const n = parseInt(text);
+          if (isNaN(n) || n < 0 || n > 100) { await ctx.reply('⚠️ 0 se 100 ke beech number daalo.'); return true; }
+          state.data.referToUnlock = n;
         }
-        await afterRefer(ctx, state);
+        state.step = 'prod_deliverytype';
+        await ctx.reply('Step 6/8 — Delivery type? Reply "file" or "link"', Markup.keyboard(['file', 'link']).oneTime().resize());
         return true;
       }
 
@@ -2768,8 +2151,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
         state.data.deliveryType = type;
         state.step = 'prod_deliveryvalue';
         if (type === 'file') {
-          state.data._filesReplaced = false;
-          await ctx.reply('Step 7/8 — Ab delivery FILES bhejo (document ke roop mein). Ek ya zyada files bhej sakte ho — sab bhejne ke baad *✅ Done* dabao.', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
+          await ctx.reply('Step 7/8 — Now send the FILE (as document) you want delivered:', Markup.removeKeyboard());
         } else {
           await ctx.reply('Step 7/8 — Send the download link (URL):', Markup.removeKeyboard());
         }
@@ -2777,31 +2159,21 @@ function setupAdminPanel(bot, fb, mdEscape) {
       }
 
       case 'prod_deliveryvalue':
-        if (skip) {   // editing: keep the current delivery
-          state.step = 'prod_image';
-          await askPhotos(ctx, state);
-          return true;
-        }
         if (state.data.deliveryType === 'link') {
           state.data.deliveryLink = text;
           state.step = 'prod_image';
-          await askPhotos(ctx, state);
+          await ctx.reply('Step 8/8 — Send a product image (photo), or type "skip":');
           return true;
         }
-        if (/^\/?done$/i.test(text) && (state.data.files || []).length) {
-          state.step = 'prod_image';
-          await askPhotos(ctx, state);
-          return true;
-        }
-        await ctx.reply((state.data.files || []).length ? '📎 Aur file bhejo, ya *✅ Done* dabao.' : '⚠️ Please send the file as a document, not text.', { parse_mode: 'Markdown' });
+        await ctx.reply('⚠️ Please send the file as a document, not text.');
         return true;
 
       case 'prod_image':
-        if (text.toLowerCase() === 'skip' || (/^\/?done$/i.test(text))) {
+        if (text.toLowerCase() === 'skip') {
           await finalizeProduct(ctx, state);
           return true;
         }
-        await ctx.reply('⚠️ Photo bhejo, ya *✅ Done* / *Skip* dabao.', { parse_mode: 'Markdown' });
+        await ctx.reply('⚠️ Send a photo, or type "skip".');
         return true;
 
       default:
@@ -2815,15 +2187,16 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const productData = {
       name: d.name, price: d.price, category: d.category,
       description: d.description || '', stock: d.stock,
-      referToUnlock: d.price === 0 ? (d.referToUnlock === undefined ? null : d.referToUnlock) : null,
+      referToUnlock: d.price === 0 ? (d.referToUnlock || 0) : 0,
       deliveryType: d.deliveryType,
-      ...fileFields(d.deliveryType === 'file' ? productFiles({ files: d.files, fileIds: d.fileIds, fileId: d.fileId }) : []),
-      deliveryLink: d.deliveryType === 'link' ? (d.deliveryLink || '') : '',
-      ...imageFields(imageFileIds)
+      fileId: d.fileId || '',
+      deliveryLink: d.deliveryLink || '',
+      imageUrl: '',
+      imageFileId: imageFileIds[0] || null,
+      imageFileIds: imageFileIds.length > 0 ? imageFileIds : null
     };
 
     const owner = await isOwner(ctx);
-    if (d.category) await fb.createProductCategory(d.category);   // keeps the managed category list in sync
     const imgNote = imageFileIds.length > 1 ? ` (${imageFileIds.length} images)` : '';
 
     if (d.isEdit) {
@@ -2866,21 +2239,9 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (!state) return false;
 
     if (state.step === 'prod_deliveryvalue' && state.data.deliveryType === 'file') {
-      // many files allowed — the admin taps ✅ Done when finished. (Editing: the first new upload replaces the old list.)
-      if (state.data.isEdit && !state.data._filesReplaced) { state.data.files = []; state.data.fileIds = null; state.data.fileId = ''; }
-      state.data._filesReplaced = true;
-      state.data.files = state.data.files || [];
-      const doc = ctx.message.document;
-      state.data.files.push({ id: doc.file_id, name: doc.file_name || '', size: doc.file_size || 0 });
-      queueStatus(ctx, state, () => `✅ *${state.data.files.length}* file${state.data.files.length > 1 ? 's' : ''} saved.\n\nAur file bhejo, ya sab ho gaya to *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — files add ho gaye', 'admin_pfdone')]]));
-      return true;
-    }
-
-    // Manage Product → add more files
-    if (state.step === 'mg_files') {
-      const doc = ctx.message.document;
-      state.data.newFiles.push({ id: doc.file_id, name: doc.file_name || '', size: doc.file_size || 0 });
-      queueStatus(ctx, state, () => `✅ *${state.data.newFiles.length}* nayi file${state.data.newFiles.length > 1 ? 's' : ''} mili.\n\nAur bhejo, ya *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — files add ho gaye', 'admin_mgdone')]]));
+      state.data.fileId = ctx.message.document.file_id;
+      state.step = 'prod_image';
+      await ctx.reply('✅ File saved.\n\nStep 8/8 — Send a product image (photo), or type "skip":');
       return true;
     }
 
@@ -2908,23 +2269,28 @@ function setupAdminPanel(bot, fb, mdEscape) {
     const mediaGroupId = ctx.message.media_group_id || null;
 
     if (state.step === 'prod_image') {
-      // Photos are collected until the admin taps ✅ Done (an album arrives as several separate messages,
-      // so we answer once, after a short pause). Editing: the first new photo replaces the old ones.
-      if (state.data.isEdit && !state.data._imagesReplaced) { state.data.imageFileIds = []; state.data.imageFileId = null; state.data.imageUrls = null; state.data.imageUrl = ''; }
-      state.data._imagesReplaced = true;
+      // Telegram's multi-select photo picker sends each photo as a SEPARATE
+      // message sharing the same media_group_id — not one message with many
+      // photos. We collect them into an array and only finalize once, after
+      // a short debounce window (so the last photo in the album has time to
+      // arrive) instead of finalizing on the very first photo received.
       if (!state.data.imageFileIds) state.data.imageFileIds = [];
-      if (state.data.imageFileIds.length >= 10) { await ctx.reply('⚠️ Max 10 photos. *Done* dabao.', { parse_mode: 'Markdown' }); return true; }
       state.data.imageFileIds.push(fileId);
-      queueStatus(ctx, state, () => `✅ *${state.data.imageFileIds.length}* photo${state.data.imageFileIds.length > 1 ? 's' : ''} saved.\n\nAur photo bhejo, ya sab ho gaya to *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — photos add ho gayi', 'admin_pidone')]]));
-      return true;
-    }
 
-    // Manage Product → add more photos
-    if (state.step === 'mg_photos') {
-      const have = productImages(await fb.getProduct(state.data.productId) || {}).length;
-      if (have + state.data.newPhotos.length >= 10) { await ctx.reply('⚠️ Max 10 photos. *Done* dabao.', { parse_mode: 'Markdown' }); return true; }
-      state.data.newPhotos.push(fileId);
-      queueStatus(ctx, state, () => `✅ *${state.data.newPhotos.length}* nayi photo${state.data.newPhotos.length > 1 ? 's' : ''} mili.\n\nAur bhejo, ya *Done* dabao.`, Markup.inlineKeyboard([[Markup.button.callback('✅ Done — photos add ho gayi', 'admin_mgdone')]]));
+      if (!mediaGroupId) {
+        // Single photo, no album — finalize immediately as before.
+        await finalizeProduct(ctx, state);
+        return true;
+      }
+
+      // Part of an album — debounce so we catch all photos in the group
+      // before creating the product once with every image attached.
+      if (state.data._mediaGroupTimer) clearTimeout(state.data._mediaGroupTimer);
+      state.data._mediaGroupId = mediaGroupId;
+      state.data._mediaGroupTimer = setTimeout(async () => {
+        if (!adminState[ctx.from.id]) return; // already finalized/cancelled
+        await finalizeProduct(ctx, state);
+      }, 1200);
       return true;
     }
 

@@ -1,10 +1,5 @@
 require('dotenv').config();
 const axios = require('axios');
-const payx = require('./payx');
-
-// Which gateway creates NEW payments: Admin Panel → Payment Settings (or PAYMENT_GATEWAY env).
-// Orders remember their gateway (PayX ids carry the "px:" prefix), so switching never strands a pending payment.
-const gatewayOf = (settings = {}) => String(settings.gateway || process.env.PAYMENT_GATEWAY || 'zapupi').toLowerCase();
 
 // Base URL and API key can be overridden by the admin panel at runtime
 // (stored in localdb's paymentSettings) — these .env values are just the
@@ -33,7 +28,6 @@ function resolveZapKey(settings = {}) {
  * 200 response: { status: "success", order_id, txn_id, payment_url, ... }
  */
 async function generateQr(upiId, amount, settings = {}) {
-  if (gatewayOf(settings) === 'payx') return payx.generateQr(amount, settings);
   try {
     // orderId must be unique per attempt — ZapUPI ties txn_id to this.
     const orderId = settings.orderId || `ord_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -76,7 +70,6 @@ async function generateQr(upiId, amount, settings = {}) {
  * 200 response: { status: "success", data: { order_id, status: "Pending"|"Success"|"Failed", ... } }
  */
 async function checkVerificationStatus(orderId, settings = {}) {
-  if (String(orderId).startsWith(payx.PREFIX)) return payx.checkVerificationStatus(orderId, settings);
   try {
     const body = {
       zap_key: resolveZapKey(settings),
@@ -131,8 +124,6 @@ async function getPaymentHistory({ status, limit } = {}, settings = {}) {
 }
 
 module.exports = {
-  gatewayOf,
-  discoverPayx: payx.discover,
   generateQr,
   submitUtr,
   checkVerificationStatus,

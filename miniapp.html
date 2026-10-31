@@ -32,6 +32,7 @@ img{display:block}
 #app{min-height:100%;padding-bottom:calc(104px + env(safe-area-inset-bottom))}
 .hide{display:none!important}
 
+.trk{display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 10px;font-size:11.5px}.trk span{padding:3px 9px;border-radius:99px;background:var(--card2,rgba(128,128,128,.14));color:var(--muted);display:inline-flex;flex-direction:column;line-height:1.25}.trk span.done{background:rgba(34,170,94,.16);color:#1f9d57;font-weight:600}.trk span.bad{background:rgba(220,60,60,.16);color:#d33}.trk i{font-style:normal;font-weight:400;opacity:.8;font-size:10.5px}
 /* ---------- splash / gate ---------- */
 .splash{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:28px}
 .logo{font-family:var(--display);font-weight:800;font-size:30px;letter-spacing:-.5px}
@@ -237,7 +238,8 @@ img{display:block}
 'use strict';
 
 /* ===================== CONFIG ===================== */
-const API_BASE = 'https://xstore-za0x.onrender.com';
+// Same-origin: works on any Render/Railway/VPS domain without editing this file
+const API_BASE = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : 'https://xstore-za0x.onrender.com';
 const STORE_NAME = 'ORVIX STORE';
 
 /* ===================== TRANSLATIONS (en / hi / hg=Hinglish) ===================== */
@@ -540,11 +542,12 @@ async function boot() {
     return;
   }
   let lastErr = '';
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 12; i++) {
     try {
       if (i > 0) $('#splashMsg').textContent = t('splash_wake');
       const j = await api('/bootstrap', undefined, 45000);
       if (j.ok) { applyBootstrap(j); return start(); }
+      if (j.code === 'STARTING') { lastErr = t('net_err'); await wait(3000); continue; }
       lastErr = errText(j); break;
     } catch (e) {
       if (e instanceof GateError) return;
@@ -651,6 +654,19 @@ function viewFree() {
   mount(topbar() + `<div class="page-title">${esc(t('free_products'))}</div>` + searchBar() + `<div class="sec">${
     list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `<div class="empty"><b>${esc(t('no_free_t'))}</b>${esc(t('no_free_s'))}</div>`}</div>`);
 }
+
+/* ---- order tracking timeline ---- */
+function timeline(o) {
+  if (o.kind !== 'product' && o.kind !== 'topup' && o.kind !== 'pro') return '';
+  const steps = [['Ordered', o.createdAt, true]];
+  const at = (st) => { const h = (o.history || []).find(x => x.status === st && !x.refundStatus); return h ? h.at : 0; };
+  const paid = o.status === 'paid' || o.status === 'delivered' || o.status === 'refunded';
+  steps.push(['Paid', at('paid'), paid]);
+  if (o.kind === 'product') steps.push(['Delivered', at('delivered'), o.status === 'delivered' || o.status === 'refunded']);
+  if (o.status === 'failed') { steps.length = 1; steps.push(['Failed / cancelled', at('failed'), true, 'bad']); }
+  if (o.refundStatus) steps.push(['Refund ' + o.refundStatus, (o.history || []).filter(x => x.refundStatus).slice(-1).map(x => x.at)[0] || 0, true, o.refundStatus === 'rejected' ? 'bad' : '']);
+  return `<div class="trk">${steps.map(([n, ts, done, cls]) => `<span class="${done ? 'done' : ''} ${cls || ''}">${esc(n)}${done && ts ? `<i>${esc(dt(ts))}</i>` : ''}</span>`).join('')}</div>`;
+}
 async function viewOrders() {
   mount(topbar() + `<div class="page-title">${esc(t('my_purchases'))}</div><div class="empty"><div class="spin" style="margin:0 auto"></div></div>`);
   if (!S.orders) { try { const j = await api('/orders'); if (j.ok) S.orders = j.orders; } catch(e){ return; } }
@@ -663,13 +679,13 @@ async function viewOrders() {
       ${o.link ? `<button class="btn sm alt" data-act="openlink" data-u="${esc(o.link)}" aria-label="${esc(t('open_link'))}">${ico('ext')}</button>` : ''}
       <button class="btn sm" data-act="redeliver" data-id="${esc(o.id)}" aria-label="${esc(t('resend'))}">${ico('down')}</button>
       ${o.productExists ? `<button class="btn sm alt" data-act="product" data-id="${esc(o.productId)}">${esc(t('open_btn'))}</button>` : ''}
-    </div>${o.amount > 0 && !o.refundStatus ? `<div style="margin:-6px 0 10px"><button class="muted" style="font-size:12.5px;text-decoration:underline" data-act="refund" data-id="${esc(o.id)}">${esc(t('refund_link'))}</button></div>` : ''}`).join('')}</div>`
+    </div>${timeline(o)}${o.amount > 0 && !o.refundStatus ? `<div style="margin:-6px 0 10px"><button class="muted" style="font-size:12.5px;text-decoration:underline" data-act="refund" data-id="${esc(o.id)}">${esc(t('refund_link'))}</button></div>` : ''}`).join('')}</div>`
     : `<div class="empty"><b>${esc(t('no_purch_t'))}</b>${esc(t('no_purch_s'))}</div>`;
   h += '</div>';
   if (other.length) {
     h += `<div class="sec"><h3>${esc(t('other_activity'))}</h3><div class="box" style="padding:4px 16px">${other.map(o => {
       const st = o.status === 'pending' ? ['wait', t('st_pending')] : o.status === 'refunded' ? ['ok', t('st_refunded')] : ['bad', t('st_failed')];
-      return `<div class="li"><div class="grow"><div class="t">${esc(o.name)}</div><div class="s">${esc(dt(o.createdAt))} · ${rs(o.amount)}</div></div><span class="badge ${st[0]}">${esc(st[1])}</span></div>`;
+      return `<div class="li"><div class="grow"><div class="t">${esc(o.name)}</div><div class="s">${esc(dt(o.createdAt))} · ${rs(o.amount)}</div></div><span class="badge ${st[0]}">${esc(st[1])}</span></div>${timeline(o)}`;
     }).join('')}</div></div>`;
   }
   mount(h);

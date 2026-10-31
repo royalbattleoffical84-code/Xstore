@@ -12,7 +12,6 @@
 // ============================================================
 
 const crypto = require('crypto');
-const { productFiles, sendFiles } = require('./productmedia');
 const path = require('path');
 const axios = require('axios');
 
@@ -187,7 +186,7 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       customButtonText: p.customButtonText || '',
       customButtonUrl: p.customButtonUrl || '',
       deliveryType: p.deliveryType || '',
-      referToUnlock: fb.effectiveReferLock(p, (await fb.getReferralSettings()).freeProductLock)
+      referToUnlock: p.price === 0 ? (p.referToUnlock || 0) : 0
     };
   }
 
@@ -227,8 +226,8 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   async function deliver(userId, product, orderId, lang) {
     const L = ['en', 'hi', 'hg'].includes(lang) ? lang : 'en';
     try {
-      if (product.deliveryType === 'file' && productFiles(product).length) {
-        await sendFiles((id, extra) => bot.telegram.sendDocument(userId, id, extra), product, ui.deliveredPlain(product.name, null, L));
+      if (product.deliveryType === 'file' && product.fileId) {
+        await bot.telegram.sendDocument(userId, product.fileId, { caption: ui.deliveredPlain(product.name, null, L) });
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
         await bot.telegram.sendMessage(userId, ui.deliveredPlain(product.name, product.deliveryLink, L));
       } else {
@@ -249,7 +248,6 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
   const snapshotOf = (p) => ({
     deliveryType: p.deliveryType,
     fileId: p.fileId || null,
-    fileIds: productFiles(p).map(f => f.id),
     deliveryLink: p.deliveryLink || null
   });
 
@@ -377,13 +375,12 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
 
       // Refer-to-unlock (VIP + owners skip it)
       let spendRef = 0;
-      const lockN = fb.effectiveReferLock(product, (await fb.getReferralSettings()).freeProductLock);
-      if (isFree && lockN > 0 && !fb.isAdmin(uid) && !(await fb.isUserVip(uid))) {
+      if (isFree && product.referToUnlock > 0 && !fb.isAdmin(uid) && !(await fb.isUserVip(uid))) {
         const rb = await fb.getReferralBalance(uid);
-        if (rb.available < lockN) {
-          return res.json({ ok: false, code: 'REFER_LOCKED', error: 'Refer to unlock', need: lockN, have: rb.available });
+        if (rb.available < product.referToUnlock) {
+          return res.json({ ok: false, code: 'REFER_LOCKED', error: 'Refer to unlock', need: product.referToUnlock, have: rb.available });
         }
-        spendRef = lockN;
+        spendRef = product.referToUnlock;
       }
       const { final, couponUsed } = (isFree || isVip) ? { final: 0, couponUsed: null } : await priceWithCoupon(product, coupon, productId);
 
@@ -539,7 +536,8 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       out.push({
         id: o.id, kind, productId: o.productId, name: o.productName, amount: o.amount, status: o.status,
         createdAt: o.createdAt, method: o.paymentMethod, refundStatus: o.refundStatus || '',
-        deliveryType, link, productExists
+        deliveryType, link, productExists,
+        history: (Array.isArray(o.statusHistory) ? o.statusHistory : []).map(h => ({ status: h.status, refundStatus: h.refundStatus || '', at: h.at }))
       });
     }
     res.json({ ok: true, orders: out });

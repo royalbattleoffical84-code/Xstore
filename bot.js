@@ -8,15 +8,16 @@ const { setupStaffApply } = require('./staffApply');
 const { setupFeatures } = require('./features');
 const { setupDevelopers } = require('./developers');
 const ui = require('./ui');
-const { productFiles, hasDelivery, sendFiles } = require('./productmedia');
 
 // ---- Persistent storage: restore data from Supabase/Firebase BEFORE serving anything ----
 // (Render's disk is wiped on every deploy; see storage.js). Everything that reads
 // or writes data waits for this promise.
+let storageIsReady = false;
 const storageReady = fb.init({
   // a newer deploy took over: stop polling Telegram so it can't write any more
   onReplaced: async () => { try { bot.stop('replaced'); } catch (e) {} }
 });
+storageReady.then(() => { storageIsReady = true; }).catch(() => {});
 storageReady.catch((err) => {
   console.error('❌ Storage restore failed — refusing to start on empty data (Render will retry):', err && err.message);
   process.exit(1);
@@ -262,7 +263,6 @@ const features = setupFeatures(bot, fb, userState, adminPanel.adminState, { mdEs
 const developers = setupDevelopers(bot, fb, adminPanel.adminState, { mdEscape });
 // First boot: default developer categories + the ready-made "Become a Developer" feature
 storageReady.then(() => features.seedDefaults()).catch((e) => console.error('seedDefaults failed:', e && e.message));
-storageReady.then(() => fb.seedProductCategories()).catch((e) => console.error('seedProductCategories failed:', e && e.message));
 
 // ============ START / REGISTER ============
 
@@ -940,14 +940,13 @@ async function sendProductCard(ctx, id, p) {
   const viewsLine = p.views ? `\n👁 ${p.views} views` : '';
   const priceLabel = p.price === 0 ? '*FREE* 🎁' : `*₹${p.price}*`;
 
-  const lockN = fb.effectiveReferLock(p, (await fb.getReferralSettings()).freeProductLock);
-  const lockLine = lockN > 0 ? `\n🔒 *Refer ${lockN} friend${lockN > 1 ? 's' : ''} to unlock*` : '';
+  const lockLine = (p.price === 0 && p.referToUnlock > 0) ? `\n🔒 *Refer ${p.referToUnlock} friend${p.referToUnlock > 1 ? 's' : ''} to unlock*` : '';
   const caption = `✨ *${mdEscape(p.name)}*\n\n${mdEscape(p.description) || ''}\n\n💰 Price: ${priceLabel}${lockLine}${ratingLine}${stockLine}${viewsLine}`;
 
   const isFree = p.price === 0;
   const rows = [
     [isFree
-      ? Markup.button.callback(lockN > 0 ? `🔒 Refer ${lockN} to Unlock` : '📥 Download Free', `freedownload_${id}`)
+      ? Markup.button.callback(p.referToUnlock > 0 ? `🔒 Refer ${p.referToUnlock} to Unlock` : '📥 Download Free', `freedownload_${id}`)
       : Markup.button.callback('🛒 Buy Now', `buy_${id}`)],
     [Markup.button.callback('⭐ Reviews', `reviews_${id}`)]
   ];
@@ -1084,7 +1083,6 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
       productSnapshot: {
         deliveryType: product.deliveryType,
         fileId: product.fileId || null,
-        fileIds: productFiles(product).map(f => f.id),
         deliveryLink: product.deliveryLink || null
       }
     });
@@ -1133,7 +1131,7 @@ bot.action(/^freedownload_(.+)$/, async (ctx) => {
   }
 
   // Refer-to-unlock: referrals are spent like tokens. VIP + owners skip the lock.
-  const need = fb.effectiveReferLock(product, (await fb.getReferralSettings()).freeProductLock);
+  const need = product.referToUnlock || 0;
   let spendReferralsN = 0;
   if (need > 0 && !fb.isAdmin(telegramId) && !(await fb.isUserVip(telegramId))) {
     const rb = await fb.getReferralBalance(telegramId);
@@ -1180,7 +1178,6 @@ bot.action(/^freedownload_(.+)$/, async (ctx) => {
     productSnapshot: {
       deliveryType: product.deliveryType,
       fileId: product.fileId || null,
-        fileIds: productFiles(product).map(f => f.id),
       deliveryLink: product.deliveryLink || null
     }
   });
@@ -1275,7 +1272,6 @@ bot.action(/^paywallet_(.+?)(?:~(.+))?$/, async (ctx) => {
       productSnapshot: {
         deliveryType: product.deliveryType,
         fileId: product.fileId || null,
-        fileIds: productFiles(product).map(f => f.id),
         deliveryLink: product.deliveryLink || null
       }
     });
@@ -1367,7 +1363,6 @@ bot.action(/^agreepay_(.+?)(?:~(.+))?$/, async (ctx) => {
     productSnapshot: {
       deliveryType: product.deliveryType,
       fileId: product.fileId || null,
-        fileIds: productFiles(product).map(f => f.id),
       deliveryLink: product.deliveryLink || null
     }
   });
@@ -1436,7 +1431,7 @@ bot.action(/^redeliver_(.+)$/, async (ctx) => {
     ...order.productSnapshot
   };
 
-  if (!hasDelivery(product)) {
+  if (!product.deliveryType || (!product.fileId && !product.deliveryLink)) {
     return ctx.reply('⚠️ Delivery details is order ke liye available nahi hain. Support se contact karo.');
   }
 
@@ -1453,9 +1448,10 @@ async function deliverProduct(ctx, product, orderId, silent) {
   }
 
   try {
-    if (product.deliveryType === 'file' && productFiles(product).length) {
-      // every file of the product (caption on the first one)
-      await sendFiles((id, extra) => ctx.replyWithDocument(id, extra), product, ui.deliveredPlain(product.name));
+    if (product.deliveryType === 'file' && product.fileId) {
+      await ctx.replyWithDocument(product.fileId, {
+        caption: ui.deliveredPlain(product.name)
+      });
     } else if (product.deliveryType === 'link' && product.deliveryLink) {
       // Sent as plain text (no Markdown parsing) — links often contain
       // underscores, asterisks, etc. which Telegram Markdown would otherwise
@@ -1904,8 +1900,10 @@ async function _checkAndProcessOrder(orderId) {
 
   if (product) {
     try {
-      if (product.deliveryType === 'file' && productFiles(product).length) {
-        await sendFiles((id, extra) => bot.telegram.sendDocument(order.userId, id, extra), product, ui.deliveredPlain(product.name));
+      if (product.deliveryType === 'file' && product.fileId) {
+        await bot.telegram.sendDocument(order.userId, product.fileId, {
+          caption: ui.deliveredPlain(product.name)
+        });
       } else if (product.deliveryType === 'link' && product.deliveryLink) {
         // Plain text (no Markdown) — links often contain underscores/asterisks
         // which Markdown parsing would otherwise corrupt or hide.
@@ -2209,14 +2207,46 @@ bot.action('closepopup', async (ctx) => {
   try { await ctx.deleteMessage(); } catch (e) {}
 });
 
+
+// ============ ORDER NOTIFICATIONS ============
+// Every order status/refund change (from the bot, the Mini App or the admin panel) lands here.
+// Payment-success + delivery already send their own messages, so we only DM the rest.
+fb.setOrderListener(async (order, before) => {
+  const uid = order.userId;
+  if (!uid || order.isWalletTopup && order.status !== 'failed') return;
+  let text = null;
+  if (order.status === 'refunded' && before.status !== 'refunded') {
+    text = `✅ Refund approved\n\nOrder: ${order.productName}\nAmount: ₹${order.amount}\n\nThe amount has been returned. Thank you for your patience! 🙏`;
+  } else if (order.refundStatus === 'rejected' && before.refundStatus !== 'rejected') {
+    text = `❌ Refund request declined\n\nOrder: ${order.productName}\n\nIf you think this is a mistake, please contact support.`;
+  } else if (order.refundStatus === 'requested' && before.refundStatus !== 'requested') {
+    text = `📨 Refund request received\n\nOrder: ${order.productName}\nWe'll update you here as soon as it is reviewed.`;
+  } else if (order.status === 'failed' && before.status === 'pending' && !order.cancelledByUser) {
+    text = `⚠️ Payment not completed\n\nOrder: ${order.productName}\nAmount: ₹${order.amount}\n\nThe payment failed or timed out. If money was deducted, contact support with this order ID: ${order.id}`;
+  }
+  if (!text) return;
+  try { await bot.telegram.sendMessage(uid, text); } catch (e) { /* user blocked the bot */ }
+});
+
 // ============ START SERVERS ============
+
+// Gate data routes until storage is restored (see below)
+app.use((req, res, next) => {
+  if (storageIsReady || !(req.path.startsWith('/api/') || req.path.startsWith('/admin-api/'))) return next();
+  res.set('Access-Control-Allow-Origin', '*');
+  return res.status(503).json({ ok: false, code: 'STARTING', error: 'Server is starting, please wait' });
+});
 
 // Telegram Mini App (serves /app + /api/mini/*)
 setupMiniApp(app, bot, fb, fampay, { checkAndProcessOrder, checkAndAlertLowStock });
 
 const PORT = process.env.PORT || 3000;
 // Open the port only after data is restored, so nothing is served from empty data
-storageReady.then(() => app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`))).catch(() => {});
+// Open the port IMMEDIATELY (Render/Telegram need a live port), but keep data routes
+// answering 503 "STARTING" until the database is restored, so nothing is served from empty
+// data and the Mini App shows "waking up" + auto-retries instead of hanging on the splash.
+app.get('/health', (req, res) => res.json({ ok: true, ready: storageIsReady }));
+app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`));
 
 // ============ GLOBAL ERROR HANDLER ============
 // Without this, any unhandled error in a handler (bad data, network blip,
