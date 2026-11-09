@@ -592,16 +592,16 @@ async function processReferralBonus(buyerTelegramId, orderAmount) {
 
 // ================= PRO PLAN / VIP =================
 
-// ================= PAYMENT SETTINGS (PayX) =================
-// Lets the admin override the .env values from inside the bot — the .env
-// values are used as the initial defaults on first run.
+// ================= PAYMENT SETTINGS (ORVIX PAY) =================
+// ORVIX PAY token is intentionally NOT stored in editable bot settings.
+// Configure ORVIX_PAY_TOKEN in the Node host environment.
 
 async function getPaymentSettings() {
   const s = readCollection('paymentSettings');
   if (Object.keys(s).length) return s;
   return {
-    apiKey: process.env.PAYX_API_KEY || '',
-    baseUrl: process.env.PAYX_BASE_URL || 'https://payx-q1nn.onrender.com',
+    apiKey: '',
+    baseUrl: process.env.ORVIX_PAY_BASE_URL || 'https://codertufan.bond/api',
     upiId: process.env.FAMPAY_UPI_ID || '',
     termsAndConditions: '📜 *Payment Terms & Conditions*\n\n1. Payment is non-refundable once the product is delivered.\n2. Verification is automatic and may take up to 30 seconds after you pay.\n3. Do not close this chat until you receive confirmation.\n4. In case of a failed payment, contact support with your UTR number.'
   };
@@ -611,8 +611,8 @@ async function updatePaymentSettings(updates) {
   return updateCollectionAtomic('paymentSettings', (current) => {
     const hasData = Object.keys(current).length > 0;
     const base = hasData ? current : {
-      apiKey: process.env.PAYX_API_KEY || '',
-      baseUrl: process.env.PAYX_BASE_URL || 'https://payx-q1nn.onrender.com',
+      apiKey: '',
+      baseUrl: process.env.ORVIX_PAY_BASE_URL || 'https://codertufan.bond/api',
       upiId: process.env.FAMPAY_UPI_ID || '',
       termsAndConditions: '📜 *Payment Terms & Conditions*\n\n1. Payment is non-refundable once the product is delivered.\n2. Verification is automatic and may take up to 30 seconds after you pay.\n3. Do not close this chat until you receive confirmation.\n4. In case of a failed payment, contact support with your UTR number.'
     };

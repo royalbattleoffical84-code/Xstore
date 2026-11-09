@@ -1,7 +1,7 @@
 {
   "name": "orvix-store-bot",
   "version": "2.0.0",
-  "description": "Telegram digital product selling bot with PayX payment gateway (local JSON storage, in-bot admin panel)",
+  "description": "Telegram digital product selling bot with ORVIX PAY integration (local JSON storage, in-bot admin panel)",
   "main": "bot.js",
   "type": "commonjs",
   "scripts": {

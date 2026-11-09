@@ -1385,7 +1385,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
     } catch (e) { await ctx.reply(text, { parse_mode: 'Markdown' }); }
   });
 
-  // ============ PAYMENT SETTINGS (FamPay) ============
+  // ============ PAYMENT SETTINGS (ORVIX PAY) ============
 
   bot.action('admin_paymentsettings', async (ctx) => {
     if (!(await isOwner(ctx))) return;
@@ -1395,12 +1395,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
   async function sendPaymentSettingsMenu(ctx) {
     const s = await fb.getPaymentSettings();
-    const maskedKey = s.apiKey ? s.apiKey.slice(0, 12) + '...' + s.apiKey.slice(-4) : 'not set';
-    const text = `💳 *Payment Settings (PayX)*\n\n🔑 PayX API Key: \`${maskedKey}\`\n🌐 PayX Server URL: ${mdEscape(s.baseUrl)}\n💰 UPI ID: \`${s.upiId || 'not set'}\`\n📜 T&C: ${s.termsAndConditions ? 'set' : 'not set'}`;
+    const tokenReady = Boolean(String(process.env.ORVIX_PAY_TOKEN || '').trim());
+    const baseUrl = process.env.ORVIX_PAY_BASE_URL || 'https://codertufan.bond/api';
+    const text = `💳 *Payment Settings (ORVIX PAY)*\n\n🔑 Server API Token: ${tokenReady ? '✅ configured in hosting environment' : '❌ ORVIX_PAY_TOKEN missing'}\n🌐 API URL: ${mdEscape(baseUrl)}\n\n⚠️ Token is server-only. Set ORVIX_PAY_TOKEN in your Node hosting Environment Variables, then restart the bot. Do not send it in Telegram chat.\n\n💰 UPI ID (legacy display): \`${s.upiId || 'not set'}\`\n📜 T&C: ${s.termsAndConditions ? 'set' : 'not set'}`;
 
     const buttons = Markup.inlineKeyboard([
-      [Markup.button.callback('🔑 Edit API Key', 'admin_editfamkey')],
-      [Markup.button.callback('🌐 Edit Base URL', 'admin_editfamurl')],
       [Markup.button.callback('💰 Edit UPI ID', 'admin_editfamupi')],
       [Markup.button.callback('📜 Edit Terms & Conditions', 'admin_editfamtc')],
       [Markup.button.callback('⬅️ Back', 'admin_settings')]
@@ -2023,17 +2022,17 @@ function setupAdminPanel(bot, fb, mdEscape) {
       return true;
     }
 
-    // ---- Payment Settings (PayX) ----
+    // ---- Payment Settings (ORVIX PAY) ----
     if (state.step === 'awaiting_fam_apikey') {
       await fb.updatePaymentSettings({ apiKey: text });
       delete adminState[ctx.from.id];
-      await ctx.reply('✅ PayX API key updated.');
+      await ctx.reply('✅ Legacy API key setting is disabled; use ORVIX_PAY_TOKEN in hosting environment.');
       return true;
     }
     if (state.step === 'awaiting_fam_baseurl') {
       await fb.updatePaymentSettings({ baseUrl: text });
       delete adminState[ctx.from.id];
-      await ctx.reply('✅ PayX server URL updated.');
+      await ctx.reply('✅ ORVIX PAY API URL is configured in hosting environment.');
       return true;
     }
     if (state.step === 'awaiting_fam_upi') {

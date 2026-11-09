@@ -528,7 +528,7 @@ bot.action('agreepayproplan', async (ctx) => {
   await deleteTriggerMessage(ctx);
 
   const paymentSettings = await fb.getPaymentSettings();
-  const qr = await fampay.generateQr(paymentSettings.upiId, settings.price, paymentSettings);
+  const qr = await fampay.generateQr(paymentSettings.upiId, settings.price, { ...paymentSettings, orderId: order.id });
 
   const order = await fb.createOrder({
     userId: String(telegramId),
@@ -549,7 +549,7 @@ bot.action('agreepayproplan', async (ctx) => {
     );
   }
 
-  await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+  await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
 
   await sendZapUpiPaymentLink(ctx, order, qr, `Pro Plan (${settings.durationDays} days)`, settings.price);
 });
@@ -1203,7 +1203,7 @@ async function showOrderSummary(ctx, productId, product, appliedCoupon) {
 
   const rows = [
     [Markup.button.callback('💰 Pay via Wallet', `paywallet_${productId}${couponSuffix}`)],
-    [Markup.button.callback('💳 Pay via PayX (UPI)', `payzabupi_${productId}${couponSuffix}`)]
+    [Markup.button.callback('💳 Pay via ORVIX PAY (UPI)', `payzabupi_${productId}${couponSuffix}`)]
   ];
   if (!appliedCoupon) {
     rows.push([Markup.button.callback('🎟 Apply Coupon', `applycoupon_${productId}`)]);
@@ -1251,7 +1251,7 @@ bot.action(/^paywallet_(.+?)(?:~(.+))?$/, async (ctx) => {
     await ctx.answerCbQuery();
     return smartReply(
       ctx,
-      `❌ *Insufficient wallet balance*\n\n💰 Balance: ₹${balance}\n💳 Required: ₹${finalPrice}\n\nPayX se add money karo pehle.`,
+      `❌ *Insufficient wallet balance*\n\n💰 Balance: ₹${balance}\n💳 Required: ₹${finalPrice}\n\nORVIX PAY se add money karo pehle.`,
       navButtons([[Markup.button.callback('➕ Add Money', 'addmoney')]], telegramId)
     );
   }
@@ -1350,7 +1350,7 @@ bot.action(/^agreepay_(.+?)(?:~(.+))?$/, async (ctx) => {
   await deleteTriggerMessage(ctx);
 
   const paymentSettings = await fb.getPaymentSettings();
-  const qr = await fampay.generateQr(paymentSettings.upiId, finalPrice, paymentSettings);
+  const qr = await fampay.generateQr(paymentSettings.upiId, finalPrice, { ...paymentSettings, orderId: order.id });
 
   const order = await fb.createOrder({
     userId: String(telegramId),
@@ -1376,7 +1376,7 @@ bot.action(/^agreepay_(.+?)(?:~(.+))?$/, async (ctx) => {
     );
   }
 
-  await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+  await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
 
   await sendZapUpiPaymentLink(ctx, order, qr, product.name, finalPrice);
 });
@@ -1712,7 +1712,7 @@ bot.action(/^agreetopup_(\d+)$/, async (ctx) => {
   await deleteTriggerMessage(ctx);
 
   const paymentSettings = await fb.getPaymentSettings();
-  const qr = await fampay.generateQr(paymentSettings.upiId, amount, paymentSettings);
+  const qr = await fampay.generateQr(paymentSettings.upiId, amount, { ...paymentSettings, orderId: order.id });
 
   const order = await fb.createOrder({
     userId: String(telegramId),
@@ -1728,7 +1728,7 @@ bot.action(/^agreetopup_(\d+)$/, async (ctx) => {
     return ctx.reply('❌ QR generate nahi ho paya. Try again.');
   }
 
-  await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+  await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
 
   await sendZapUpiPaymentLink(ctx, order, qr, 'Wallet Top-up', amount);
 });
@@ -1847,6 +1847,29 @@ async function _checkAndProcessOrder(orderId) {
   }
   if (status !== 'success') {
     return { processed: false, reason: 'still_pending' }; // keep polling
+  }
+
+  // Test-mode success must never trigger real product delivery or wallet credit.
+  // ORVIX PAY records the environment on each order; require an explicit live
+  // environment from the status response or the create-order response we stored.
+  const verifiedEnvironment = String(statusCheck.environment || order.gatewayEnvironment || '').toLowerCase();
+  if (!['live', 'production'].includes(verifiedEnvironment)) {
+    console.error('ORVIX PAY success not fulfilled: live environment not verified:', {
+      orderId, environment: verifiedEnvironment || 'missing'
+    });
+    return { processed: false, reason: verifiedEnvironment === 'test' ? 'test_order_not_fulfilled' : 'environment_unverified' };
+  }
+
+  // If ORVIX PAY returns the paid amount, require it to match this store order.
+  // Missing amount is tolerated for compatibility with gateway responses that
+  // omit it; a reported mismatch is never fulfilled.
+  if (statusCheck.amount != null &&
+      (!Number.isFinite(Number(statusCheck.amount)) ||
+       Math.abs(Number(statusCheck.amount) - Number(order.amount)) > 0.01)) {
+    console.error('ORVIX PAY amount mismatch; order left pending:', {
+      orderId, expected: order.amount, received: statusCheck.amount
+    });
+    return { processed: false, reason: 'amount_mismatch' };
   }
 
   await fb.updateOrderStatus(orderId, 'paid', { famVerifiedAt: Date.now() });

@@ -439,13 +439,13 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
         source: 'miniapp',
         productSnapshot: snapshotOf(product)
       });
-      const qr = await fampay.generateQr(paymentSettings.upiId, final, paymentSettings);
+      const qr = await fampay.generateQr(paymentSettings.upiId, final, { ...paymentSettings, orderId: order.id });
       if (!qr.success) {
         await fb.updateOrderStatus(order.id, 'failed');
         console.error('MiniApp ZapUPI order failed:', qr.error);
         return res.json({ ok: false, code: 'PAY_LINK', error: 'Payment link failed' });
       }
-      await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+      await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
       return res.json({ ok: true, status: 'pending', orderId: order.id, paymentUrl: qr.paymentUrl, amount: final });
     } finally {
       inflight.delete(lockKey);
@@ -463,12 +463,12 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       userId: uid, productId: 'WALLET_TOPUP', productName: 'Wallet Top-up',
       amount, paymentMethod: 'fampay', isWalletTopup: true, source: 'miniapp'
     });
-    const qr = await fampay.generateQr(paymentSettings.upiId, amount, paymentSettings);
+    const qr = await fampay.generateQr(paymentSettings.upiId, amount, { ...paymentSettings, orderId: order.id });
     if (!qr.success) {
       await fb.updateOrderStatus(order.id, 'failed');
       return res.json({ ok: false, code: 'PAY_LINK', error: 'Payment link failed' });
     }
-    await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+    await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
     res.json({ ok: true, orderId: order.id, paymentUrl: qr.paymentUrl, amount });
   }));
 
@@ -483,12 +483,12 @@ function setupMiniApp(app, bot, fb, fampay, hooks = {}) {
       userId: uid, productId: 'PRO_PLAN', productName: `Pro Plan (${settings.durationDays} days)`,
       amount: settings.price, paymentMethod: 'fampay', isProPlan: true, proPlanDuration: settings.durationDays, source: 'miniapp'
     });
-    const qr = await fampay.generateQr(paymentSettings.upiId, settings.price, paymentSettings);
+    const qr = await fampay.generateQr(paymentSettings.upiId, settings.price, { ...paymentSettings, orderId: order.id });
     if (!qr.success) {
       await fb.updateOrderStatus(order.id, 'failed');
       return res.json({ ok: false, code: 'PAY_LINK', error: 'Payment link failed' });
     }
-    await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+    await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
     res.json({ ok: true, orderId: order.id, paymentUrl: qr.paymentUrl, amount: settings.price });
   }));
 

@@ -183,12 +183,12 @@ function setupStaffApply(bot, fb, userState, { mdEscape, sendMainMenu, sendMainM
       // still works if the bot restarts while the user is paying.
       staffApplication: st.data
     });
-    const qr = await fampay.generateQr(paymentSettings.upiId, cfg.applyFee, paymentSettings);
+    const qr = await fampay.generateQr(paymentSettings.upiId, cfg.applyFee, { ...paymentSettings, orderId: order.id });
     if (!qr.success) {
       await fb.updateOrderStatus(order.id, 'failed');
       return ctx.reply('❌ Payment link nahi ban paya. Thodi der baad try karo ya wallet se pay karo.');
     }
-    await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId });
+    await fb.updateOrderStatus(order.id, 'pending', { famOrderId: qr.orderId, gatewayEnvironment: qr.environment || null });
     delete userState[uid];
     await sendZapUpiPaymentLink(ctx, order, qr, 'Staff Application Fee', cfg.applyFee);
   });
