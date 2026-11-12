@@ -1991,15 +1991,8 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (state.step === 'awaiting_channel_username') {
       const settings = await fb.getBotSettings();
       const channels = settings.channels || [];
-      let username = text.trim().replace(/^https?:\/\/(www\.)?t\.me\//i, '');
-      username = username.replace(/^@+/, '').replace(/[?#].*$/, '').replace(/\/+$/, '').split('/')[0];
-      if (!/^[A-Za-z0-9_]{5,}$/.test(username)) {
-        await ctx.reply('⚠️ Valid public channel username bhejo, jaise @orvixdigital001 ya https://t.me/orvixdigital001');
-        return true;
-      }
-      if (!channels.some(c => String(c.username || '').replace(/^@/, '').toLowerCase() === username.toLowerCase())) {
-        channels.push({ username, label: username, required: true });
-      }
+      const username = text.replace('@', '');
+      channels.push({ username, label: username, required: true });
       await fb.updateBotSettings({ channels });
       delete adminState[ctx.from.id];
       await ctx.reply(`✅ Channel @${username} added as required. Make sure the bot is an admin in that channel!`);

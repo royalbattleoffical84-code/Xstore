@@ -189,28 +189,16 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// Normalize channel values saved as @username, username, or a public t.me URL.
-function normalizeChannelUsername(value) {
-  let handle = String(value || '').trim();
-  handle = handle.replace(/^https?:\/\/(www\.)?t\.me\//i, '');
-  handle = handle.replace(/^@+/, '').replace(/[?#].*$/, '').replace(/\/+$/, '');
-  if (/^-?\d+$/.test(handle)) return handle; // numeric channel ID
-  handle = handle.split('/')[0];
-  return /^[A-Za-z0-9_]{5,}$/.test(handle) ? `@${handle}` : '';
-}
-
 async function checkChannelMembership(telegramId, channelUsername) {
-  const handle = normalizeChannelUsername(channelUsername);
-  if (!handle) {
-    console.error(`Invalid required channel setting: ${String(channelUsername)}`);
-    return true;
-  }
   try {
+    const handle = channelUsername.startsWith('@') ? channelUsername : `@${channelUsername}`;
     const member = await bot.telegram.getChatMember(handle, telegramId);
     return ['member', 'administrator', 'creator'].includes(member.status);
   } catch (err) {
-    console.error(`Channel membership check failed for ${channelUsername} (normalized: ${handle}):`, err.message);
-    return true; // fail open so a config mistake cannot lock everyone out
+    console.error(`Channel membership check failed for ${channelUsername}:`, err.message);
+    // If the bot isn't an admin in the channel or channel is misconfigured,
+    // fail open for that channel so a config mistake doesn't block everyone.
+    return true;
   }
 }
 
@@ -225,10 +213,8 @@ async function getUnjoinedChannels(telegramId, channels) {
 
 async function sendJoinPrompt(ctx, channels) {
   const buttons = channels.map(ch => {
-    const normalized = normalizeChannelUsername(ch.username);
-    const handle = normalized.startsWith('@') ? normalized.slice(1) : normalized;
-    const joinTarget = handle || String(ch.username || '').replace(/^@/, '');
-    return [Markup.button.url(`📢 Join ${ch.label || handle || 'Channel'}`, `https://t.me/${joinTarget}`)];
+    const handle = ch.username.startsWith('@') ? ch.username.slice(1) : ch.username;
+    return [Markup.button.url(`📢 Join ${ch.label || handle}`, `https://t.me/${handle}`)];
   });
   buttons.push([Markup.button.callback('✅ I\'ve Joined All', 'check_joined')]);
 
@@ -2106,56 +2092,34 @@ async function processBroadcastQueue() {
     const imageIds = Array.isArray(data.imageIds) ? data.imageIds : [];
 
     let successCount = 0;
-    let failedCount = 0;
-    const failureSamples = {};
     const sentMessages = {};
 
     for (const uid of userIds) {
-      const chatId = String(uid);
       try {
         let sentMsg;
-        const body = `${prefix}\n\n${data.message || ''}`;
         if (imageIds.length > 0) {
-          try {
-            sentMsg = await bot.telegram.sendPhoto(chatId, imageIds[0], { caption: body, ...extra });
-          } catch (photoError) {
-            console.error(`Broadcast photo failed for ${chatId}; retrying as text:`, photoError.message);
-            try { sentMsg = await bot.telegram.sendMessage(chatId, body, extra); }
-            catch (markdownError) { sentMsg = await bot.telegram.sendMessage(chatId, body); }
-          }
+          sentMsg = await bot.telegram.sendPhoto(uid, imageIds[0], { caption: `${prefix}\n\n${data.message}`, ...extra });
           for (const imgId of imageIds.slice(1)) {
-            try { await bot.telegram.sendPhoto(chatId, imgId); }
-            catch (e) { console.error(`Extra broadcast photo failed for ${chatId}:`, e.message); }
+            try { await bot.telegram.sendPhoto(uid, imgId); } catch (e) {}
           }
         } else {
-          try { sentMsg = await bot.telegram.sendMessage(chatId, body, extra); }
-          catch (markdownError) { sentMsg = await bot.telegram.sendMessage(chatId, body); }
+          sentMsg = await bot.telegram.sendMessage(uid, `${prefix}\n\n${data.message}`, extra);
         }
         for (const fid of fileIds) {
-          try { await bot.telegram.sendDocument(chatId, fid); }
-          catch (e) { console.error(`Broadcast document failed for ${chatId}:`, e.message); }
+          try { await bot.telegram.sendDocument(uid, fid); } catch (e) {}
         }
-        sentMessages[chatId] = { chatId: sentMsg.chat.id, messageId: sentMsg.message_id };
+        sentMessages[uid] = { chatId: sentMsg.chat.id, messageId: sentMsg.message_id };
         successCount++;
-        await fb.setUserField(chatId, 'lastUnseenBroadcastId', id);
-      } catch (e) {
-        failedCount++;
-        const reason = e.response?.description || e.description || e.message || 'Unknown Telegram error';
-        const key = reason.slice(0, 180);
-        failureSamples[key] = (failureSamples[key] || 0) + 1;
-        if (failedCount <= 5) console.error(`Broadcast failed for user ${chatId}:`, reason);
-        const retryAfter = e.response?.parameters?.retry_after;
-        if (retryAfter) await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
-      }
+        await fb.setUserField(uid, 'lastUnseenBroadcastId', id);
+      } catch (e) { /* user blocked bot — skip */ }
       await new Promise(r => setTimeout(r, 50));
     }
 
     await fb.updateBroadcastEntry(id, {
-      sent: true, sentAt: Date.now(), sentCount: successCount, failedCount,
-      failureSamples, targetCount: userIds.length, seenCount: 0, sentMessages
+      sent: true, sentAt: Date.now(), sentCount: successCount,
+      targetCount: userIds.length, seenCount: 0, sentMessages
     });
-    console.log(`📢 Broadcast sent to ${successCount}/${userIds.length} users (${failedCount} failed)`);
-    if (failedCount > 0) console.error('Broadcast failure summary:', JSON.stringify(failureSamples));
+    console.log(`📢 Broadcast sent to ${successCount}/${userIds.length} users`);
   }
 }
 
