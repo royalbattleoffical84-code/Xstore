@@ -1,0 +1,24 @@
+ORVIX STORE FIX NOTES
+
+Files changed:
+- Xstore-main/bot.js
+  * Normalizes saved channel values such as https://t.me/channelname into @channelname before getChatMember.
+  * Adds clearer membership-check logs.
+  * Broadcast now retries as plain text if Markdown or photo delivery fails.
+  * Logs Telegram delivery errors and saves failure counts/samples in the broadcast record.
+
+- Xstore-main/adminPanel.js
+  * Accepts a channel username or public t.me URL and stores only the username.
+  * Rejects invalid channel inputs and avoids duplicate channel entries.
+
+Deploy:
+1. Replace the existing project files with the files from this ZIP (keep your existing Render environment variables).
+2. Commit/push or upload the updated files using your current deployment method.
+3. Let Render redeploy.
+4. In bot admin settings > Required Channels, verify the channel is listed as @orvixdigital001 (old saved t.me URL values are normalized automatically).
+5. Test broadcast with a short message to yourself first.
+
+Important:
+- Keep the bot as an admin in the channel.
+- This code cannot make Telegram deliver messages to users who never started the bot, blocked it, or whose chat is unavailable.
+- If the next broadcast still fails, check Render logs for the newly printed "Broadcast failed for user..." reason and share that exact error.
