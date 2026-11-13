@@ -2067,96 +2067,120 @@ app.get('/', (req, res) => res.send('Bot server running ✅'));
 // child_added/child_changed — instead, we poll the broadcast/DM queues and
 // the products list every few seconds and process anything new.
 
+let broadcastQueueRunning = false;
 async function processBroadcastQueue() {
-  const queue = await fb.getBroadcastQueue();
-
-  for (const [id, data] of Object.entries(queue)) {
-    // ---- Handle unsend requests ----
-    if (data.deleteRequested && !data.deleted) {
-      const sentMessages = data.sentMessages || {};
-      const entries = Object.entries(sentMessages);
-      if (entries.length === 0) {
-        await fb.updateBroadcastEntry(id, { deleted: true, deleteError: 'No message references saved' });
+  if (broadcastQueueRunning) return;
+  broadcastQueueRunning = true;
+  try {
+    const queue = await fb.getBroadcastQueue();
+    for (const [id, data] of Object.entries(queue)) {
+      if (data.deleteRequested && !data.deleted) {
+        const sentMessages = data.sentMessages || {};
+        const entries = Object.entries(sentMessages);
+        if (entries.length === 0) {
+          await fb.updateBroadcastEntry(id, { deleted: true, deleteError: 'No message references saved' });
+          continue;
+        }
+        let unsentCount = 0;
+        for (const [uid, ref] of entries) {
+          try { await bot.telegram.deleteMessage(ref.chatId, ref.messageId); unsentCount++; }
+          catch (err) { /* Telegram may reject old/already deleted messages */ }
+          await new Promise(r => setTimeout(r, 50));
+        }
+        await fb.updateBroadcastEntry(id, { deleted: true, deletedAt: Date.now(), unsentCount });
+        console.log(`🗑️ Broadcast unsent from ${unsentCount}/${entries.length} chats`);
         continue;
       }
-      let unsentCount = 0;
-      for (const [uid, ref] of entries) {
-        try { await bot.telegram.deleteMessage(ref.chatId, ref.messageId); unsentCount++; }
-        catch (err) { /* too old (48h+) or already gone — skip */ }
-        await new Promise(r => setTimeout(r, 50));
+      if (data.sent) continue;
+      // Legacy in-flight broadcasts have no recipient checkpoint. Do not replay them
+      // automatically, because some recipients may already have received the message.
+      if (!data.sentUsers && !data.status) {
+        await fb.updateBroadcastEntry(id, { sent: true, status: 'paused_legacy_no_checkpoint', pausedAt: Date.now() });
+        console.warn(`⚠️ Paused legacy broadcast ${id}: no per-user delivery checkpoint; manual review required.`);
+        continue;
       }
-      await fb.updateBroadcastEntry(id, { deleted: true, deletedAt: Date.now(), unsentCount });
-      console.log(`🗑️ Broadcast unsent from ${unsentCount}/${entries.length} chats`);
-      continue;
-    }
 
-    // ---- Handle new (unsent) broadcasts ----
-    if (data.sent) continue;
+      const users = await fb.getAllUsers();
+      const userIds = Object.keys(users);
+      const sentUsers = { ...(data.sentUsers || {}) };
+      const sentMessages = { ...(data.sentMessages || {}) };
+      const inlineKeyboard = [];
+      if (data.buttonText && data.buttonUrl) inlineKeyboard.push([{ text: data.buttonText, url: data.buttonUrl }]);
+      if (data.isPopup) inlineKeyboard.push([{ text: '❌ Close', callback_data: 'closepopup' }]);
+      const extra = { parse_mode: 'Markdown' };
+      if (inlineKeyboard.length) extra.reply_markup = { inline_keyboard: inlineKeyboard };
+      const prefix = data.isPopup ? '🔔 *Notification*' : '📢 *Announcement*';
+      const fileIds = Array.isArray(data.fileIds) ? data.fileIds : [];
+      const imageIds = Array.isArray(data.imageIds) ? data.imageIds : [];
+      let successCount = Object.values(sentUsers).filter(x => x && x.status === 'sent').length;
 
-    const users = await fb.getAllUsers();
-    const userIds = Object.keys(users);
+      for (const uid of userIds) {
+        const previous = sentUsers[uid];
+        if (previous && previous.status === 'sent') continue;
+        if (data.retryOnlyFailed && (!previous || previous.status !== 'failed')) continue;
 
-    const inlineKeyboard = [];
-    if (data.buttonText && data.buttonUrl) inlineKeyboard.push([{ text: data.buttonText, url: data.buttonUrl }]);
-    if (data.isPopup) inlineKeyboard.push([{ text: '❌ Close', callback_data: 'closepopup' }]);
-    const extra = { parse_mode: 'Markdown' };
-    if (inlineKeyboard.length > 0) extra.reply_markup = { inline_keyboard: inlineKeyboard };
-
-    const prefix = data.isPopup ? '🔔 *Notification*' : '📢 *Announcement*';
-    const fileIds = Array.isArray(data.fileIds) ? data.fileIds : [];
-    const imageIds = Array.isArray(data.imageIds) ? data.imageIds : [];
-
-    let successCount = 0;
-    let failedCount = 0;
-    const failureSamples = {};
-    const sentMessages = {};
-
-    for (const uid of userIds) {
-      const chatId = String(uid);
-      try {
-        let sentMsg;
-        const body = `${prefix}\n\n${data.message || ''}`;
-        if (imageIds.length > 0) {
+        let delivered = false;
+        let lastError = '';
+        for (let attempt = 1; attempt <= 3 && !delivered; attempt++) {
           try {
-            sentMsg = await bot.telegram.sendPhoto(chatId, imageIds[0], { caption: body, ...extra });
-          } catch (photoError) {
-            console.error(`Broadcast photo failed for ${chatId}; retrying as text:`, photoError.message);
-            try { sentMsg = await bot.telegram.sendMessage(chatId, body, extra); }
-            catch (markdownError) { sentMsg = await bot.telegram.sendMessage(chatId, body); }
+            let sentMsg;
+            if (imageIds.length) {
+              try { sentMsg = await bot.telegram.sendPhoto(uid, imageIds[0], { caption: `${prefix}\n\n${data.message}`, ...extra }); }
+              catch (photoErr) {
+                const desc = String(photoErr.description || photoErr.message || '');
+                if (/parse entities|can't parse|can't find end/i.test(desc)) sentMsg = await bot.telegram.sendPhoto(uid, imageIds[0], { caption: `${prefix}\n\n${data.message}` });
+                else throw photoErr;
+              }
+              for (const imgId of imageIds.slice(1)) {
+                try { await bot.telegram.sendPhoto(uid, imgId); }
+                catch (e) { console.warn(`Broadcast extra photo failed for ${uid}:`, e.message); }
+              }
+            } else {
+              try { sentMsg = await bot.telegram.sendMessage(uid, `${prefix}\n\n${data.message}`, extra); }
+              catch (messageErr) {
+                const desc = String(messageErr.description || messageErr.message || '');
+                if (/parse entities|can't parse|can't find end/i.test(desc)) sentMsg = await bot.telegram.sendMessage(uid, `${prefix}\n\n${data.message}`);
+                else throw messageErr;
+              }
+            }
+            for (const fid of fileIds) {
+              try { await bot.telegram.sendDocument(uid, fid); }
+              catch (e) { console.warn(`Broadcast attachment failed for ${uid}:`, e.message); }
+            }
+            sentMessages[uid] = { chatId: sentMsg.chat.id, messageId: sentMsg.message_id };
+            sentUsers[uid] = { status: 'sent', at: Date.now(), messageId: sentMsg.message_id };
+            await fb.setUserField(uid, 'lastUnseenBroadcastId', id);
+            delivered = true;
+          } catch (e) {
+            lastError = String(e.description || e.message || 'Telegram send failed').slice(0, 300);
+            const retryAfter = Number(e.response && e.response.parameters && e.response.parameters.retry_after || e.parameters && e.parameters.retry_after || 0);
+            const code = Number(e.response && e.response.error_code || e.code || 0);
+            if (retryAfter > 0 && attempt < 3) await new Promise(r => setTimeout(r, retryAfter * 1000));
+            else if ((code >= 500 || /timeout|ECONNRESET|network/i.test(lastError)) && attempt < 3) await new Promise(r => setTimeout(r, attempt * 1200));
+            else break;
           }
-          for (const imgId of imageIds.slice(1)) {
-            try { await bot.telegram.sendPhoto(chatId, imgId); }
-            catch (e) { console.error(`Extra broadcast photo failed for ${chatId}:`, e.message); }
-          }
-        } else {
-          try { sentMsg = await bot.telegram.sendMessage(chatId, body, extra); }
-          catch (markdownError) { sentMsg = await bot.telegram.sendMessage(chatId, body); }
         }
-        for (const fid of fileIds) {
-          try { await bot.telegram.sendDocument(chatId, fid); }
-          catch (e) { console.error(`Broadcast document failed for ${chatId}:`, e.message); }
-        }
-        sentMessages[chatId] = { chatId: sentMsg.chat.id, messageId: sentMsg.message_id };
-        successCount++;
-        await fb.setUserField(chatId, 'lastUnseenBroadcastId', id);
-      } catch (e) {
-        failedCount++;
-        const reason = e.response?.description || e.description || e.message || 'Unknown Telegram error';
-        const key = reason.slice(0, 180);
-        failureSamples[key] = (failureSamples[key] || 0) + 1;
-        if (failedCount <= 5) console.error(`Broadcast failed for user ${chatId}:`, reason);
-        const retryAfter = e.response?.parameters?.retry_after;
-        if (retryAfter) await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+        if (!delivered) sentUsers[uid] = { status: 'failed', at: Date.now(), error: lastError };
+        else successCount++;
+        await fb.updateBroadcastEntry(id, {
+          sentUsers, sentMessages, sentCount: successCount,
+          failedCount: Object.values(sentUsers).filter(x => x && x.status === 'failed').length,
+          targetCount: userIds.length, processedCount: Object.keys(sentUsers).length,
+          status: 'sending', lastProgressAt: Date.now()
+        });
+        await new Promise(r => setTimeout(r, 45));
       }
-      await new Promise(r => setTimeout(r, 50));
-    }
 
-    await fb.updateBroadcastEntry(id, {
-      sent: true, sentAt: Date.now(), sentCount: successCount, failedCount,
-      failureSamples, targetCount: userIds.length, seenCount: 0, sentMessages
-    });
-    console.log(`📢 Broadcast sent to ${successCount}/${userIds.length} users (${failedCount} failed)`);
-    if (failedCount > 0) console.error('Broadcast failure summary:', JSON.stringify(failureSamples));
+      const finalFailed = Object.values(sentUsers).filter(x => x && x.status === 'failed').length;
+      await fb.updateBroadcastEntry(id, {
+        sent: true, status: finalFailed ? 'completed_with_errors' : 'completed', sentAt: Date.now(),
+        sentCount: successCount, failedCount: finalFailed, targetCount: userIds.length,
+        seenCount: data.seenCount || 0, sentMessages, sentUsers, retryOnlyFailed: false
+      });
+      console.log(`📢 Broadcast ${id}: ${successCount}/${userIds.length} sent, ${finalFailed} failed`);
+    }
+  } finally {
+    broadcastQueueRunning = false;
   }
 }
 

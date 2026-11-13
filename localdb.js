@@ -275,10 +275,47 @@ async function getProductsByCategory(category) {
 }
 
 async function getAllCategories() {
-  const all = await getAllProducts(true);
-  const cats = new Set();
-  Object.values(all).forEach(p => cats.add(p.category));
-  return [...cats];
+  const all = await getAllProducts(false);
+  const saved = readCollection('storeCategories');
+  const cats = new Map();
+  Object.values(saved).filter(c => c && c.active !== false).forEach(c => cats.set(String(c.name).toLowerCase(), c.name));
+  Object.values(all).forEach(p => { if (p.category) cats.set(String(p.category).toLowerCase(), p.category); });
+  return [...cats.values()].sort((a, b) => a.localeCompare(b));
+}
+async function createStoreCategory(name) {
+  const clean = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!clean || clean.length > 50) throw new Error('Category must be 1-50 characters.');
+  const key = clean.toLowerCase();
+  const all = readCollection('storeCategories');
+  const existing = Object.values(all).find(c => c && String(c.name).toLowerCase() === key);
+  if (existing) return existing;
+  const id = generateId('sc_');
+  const category = { id, name: clean, active: true, createdAt: Date.now() };
+  await updateCollectionAtomic('storeCategories', c => { c[id] = category; });
+  return category;
+}
+async function renameStoreCategory(oldName, newName) {
+  const clean = String(newName || '').trim().replace(/\s+/g, ' ');
+  if (!clean || clean.length > 50) throw new Error('Category must be 1-50 characters.');
+  const products = readCollection('products');
+  const inUse = Object.values(products).some(p => String(p.category || '').toLowerCase() === String(oldName).toLowerCase());
+  if (inUse) await updateCollectionAtomic('products', all => {
+    for (const [id, product] of Object.entries(all)) if (String(product.category || '').toLowerCase() === String(oldName).toLowerCase()) all[id] = { ...product, category: clean };
+  });
+  await updateCollectionAtomic('storeCategories', cats => {
+    for (const [id, c] of Object.entries(cats)) if (String(c.name).toLowerCase() === String(oldName).toLowerCase()) cats[id] = { ...c, name: clean, updatedAt: Date.now() };
+  });
+  await createStoreCategory(clean);
+  return clean;
+}
+async function deleteStoreCategory(name) {
+  const products = readCollection('products');
+  const inUse = Object.values(products).filter(p => String(p.category || '').toLowerCase() === String(name).toLowerCase()).length;
+  if (inUse) return { deleted: false, inUse };
+  await updateCollectionAtomic('storeCategories', cats => {
+    for (const [id, c] of Object.entries(cats)) if (String(c.name).toLowerCase() === String(name).toLowerCase()) delete cats[id];
+  });
+  return { deleted: true, inUse: 0 };
 }
 
 async function getProduct(productId) {
@@ -1153,6 +1190,9 @@ module.exports = {
   getAllProducts,
   getProductsByCategory,
   getAllCategories,
+  createStoreCategory,
+  renameStoreCategory,
+  deleteStoreCategory,
   getProduct,
   searchProducts,
   createProduct,

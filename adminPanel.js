@@ -139,6 +139,7 @@ function setupAdminPanel(bot, fb, mdEscape) {
       rows.push([Markup.button.callback('🎟 Coupons', 'admin_coupons'), Markup.button.callback('🔗 Referral', 'admin_referral')]);
       rows.push([Markup.button.callback('📢 Broadcast', 'admin_broadcast'), Markup.button.callback('📩 Direct Message', 'admin_dm')]);
       rows.push([Markup.button.callback('📜 Message History', 'admin_msghistory')]);
+      rows.push([Markup.button.callback('🗂 Categories', 'admin_categories')]);
       rows.push([Markup.button.callback('⚙️ Bot Settings', 'admin_settings'), Markup.button.callback('🔘 Menu Buttons', 'admin_menubuttons')]);
       rows.push([Markup.button.callback('👑 Pro Plan', 'admin_proplan'), Markup.button.callback('🎯 Check-in', 'admin_checkin')]);
       rows.push([Markup.button.callback('📊 Sales Report', 'admin_report'), Markup.button.callback('🏆 Leaderboard', 'admin_leaderboard')]);
@@ -198,6 +199,41 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.answerCbQuery();
     delete adminState[ctx.from.id];
     await sendAdminMenu(ctx);
+  });
+
+  // ============ STORE CATEGORY MANAGEMENT (OWNER) ============
+  async function showStoreCategories(ctx) {
+    const cats = await fb.getAllCategories();
+    const rows = cats.map((name, i) => [Markup.button.callback(`✏️ ${name}`.slice(0, 60), `admin_cat_edit_${i}`), Markup.button.callback('🗑', `admin_cat_del_${i}`)]);
+    rows.push([Markup.button.callback('➕ Add New Category', 'admin_cat_add')]);
+    rows.push([Markup.button.callback('⬅️ Back', 'admin_home')]);
+    const text = `🗂 *Category Management*\n\nTotal categories: ${cats.length}\nSelect a category to rename or delete. Categories containing products cannot be deleted.`;
+    try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+    catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }); }
+  }
+  bot.action('admin_categories', async ctx => {
+    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Sirf owner ke liye.', { show_alert: true });
+    await ctx.answerCbQuery(); await showStoreCategories(ctx);
+  });
+  bot.action('admin_cat_add', async ctx => {
+    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Sirf owner ke liye.', { show_alert: true });
+    await ctx.answerCbQuery(); adminState[ctx.from.id] = { step: 'store_cat_add', data: {} };
+    await ctx.reply('New category name bhejo (1-50 characters):');
+  });
+  bot.action(/^admin_cat_edit_(\d+)$/, async ctx => {
+    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Sirf owner ke liye.', { show_alert: true });
+    const cats = await fb.getAllCategories(); const name = cats[Number(ctx.match[1])];
+    if (!name) return ctx.answerCbQuery('Category not found.');
+    await ctx.answerCbQuery(); adminState[ctx.from.id] = { step: 'store_cat_rename', data: { oldName: name } };
+    await ctx.reply(`Rename category "${name}". Naya naam bhejo:`);
+  });
+  bot.action(/^admin_cat_del_(\d+)$/, async ctx => {
+    if (!(await isOwner(ctx))) return ctx.answerCbQuery('Sirf owner ke liye.', { show_alert: true });
+    const cats = await fb.getAllCategories(); const name = cats[Number(ctx.match[1])];
+    if (!name) return ctx.answerCbQuery('Category not found.');
+    const result = await fb.deleteStoreCategory(name);
+    await ctx.answerCbQuery(result.deleted ? 'Category deleted.' : `Is category mein ${result.inUse} product(s) hain.`, { show_alert: !result.deleted });
+    await showStoreCategories(ctx);
   });
 
   // ============ PRODUCTS ============
@@ -1308,6 +1344,27 @@ function setupAdminPanel(bot, fb, mdEscape) {
     await ctx.reply('📢 *Broadcast*\n\nType the message to send to all users:', { parse_mode: 'Markdown', ...adminBackButton('admin_home') });
   });
 
+  bot.action('admin_bc_confirm', async ctx => {
+    if (!(await needPerm(ctx, 'broadcast'))) return;
+    const state = adminState[ctx.from.id];
+    if (!state || state.step !== 'bc_confirm') return ctx.answerCbQuery('Broadcast draft expire ho gaya.', { show_alert: true });
+    const d = state.data;
+    const id = await fb.queueBroadcast({
+      message: d.message, imageIds: d.imageId ? [d.imageId] : null, fileIds: d.fileId ? [d.fileId] : null,
+      buttonText: d.buttonText || null, buttonUrl: d.buttonUrl || null, isPopup: !!d.isPopup,
+      sentUsers: {}, sentMessages: {}, sentCount: 0, failedCount: 0, status: 'queued'
+    });
+    delete adminState[ctx.from.id];
+    await ctx.answerCbQuery('Broadcast queued.');
+    try { await ctx.editMessageText(`✅ Broadcast queued.\nID: ${id}\nProgress aur failed users Broadcast History mein dekh sakte ho.`); }
+    catch (e) { await ctx.reply(`✅ Broadcast queued. ID: ${id}`); }
+  });
+  bot.action('admin_bc_cancel', async ctx => {
+    if (!(await needPerm(ctx, 'broadcast'))) return;
+    delete adminState[ctx.from.id]; await ctx.answerCbQuery('Broadcast cancelled.');
+    try { await ctx.editMessageText('❌ Broadcast cancelled.'); } catch (e) {}
+  });
+
   // ============ DIRECT MESSAGE ============
 
   bot.action('admin_dm', async (ctx) => {
@@ -1687,8 +1744,9 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (pageItems.length === 0) text += '_No broadcasts yet._';
     const buttons = [];
     pageItems.forEach(([id, b]) => {
-      const status = b.sent ? `✅ ${b.sentCount ?? 0}/${b.targetCount ?? '?'}` : '⏳ sending...';
+      const status = b.sent ? `${b.failedCount ? '⚠️' : '✅'} ${b.sentCount ?? 0}/${b.targetCount ?? '?'} (failed ${b.failedCount || 0})` : `⏳ ${b.sentCount || 0}/${b.targetCount || '?'} sent`;
       text += `${status} 👁${b.seenCount || 0} — ${(b.message || '').slice(0, 35)}\n`;
+      if (b.failedCount > 0 && b.sent) buttons.push([Markup.button.callback(`🔁 Retry ${b.failedCount} failed`, `admin_retrybc_${id}`)]);
       if (b.sentMessages && !b.deleted) buttons.push([Markup.button.callback('🗑 Unsend from everyone', `admin_unsendbc_${id}`)]);
     });
     const navRow = [];
@@ -1699,6 +1757,14 @@ function setupAdminPanel(bot, fb, mdEscape) {
 
     try { await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) }); }
     catch (e) { await ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) }); }
+  });
+
+  bot.action(/^admin_retrybc_(.+)$/, async (ctx) => {
+    if (!(await needPerm(ctx, 'broadcast'))) return;
+    const id = ctx.match[1]; const queue = await fb.getBroadcastQueue(); const entry = queue[id];
+    if (!entry || !entry.sent || !(entry.failedCount > 0)) return ctx.answerCbQuery('No failed recipients to retry.', { show_alert: true });
+    await fb.updateBroadcastEntry(id, { sent: false, status: 'retrying_failed', retryOnlyFailed: true, retryRequestedAt: Date.now() });
+    await ctx.answerCbQuery('🔁 Failed recipients retry queued.');
   });
 
   bot.action(/^admin_unsendbc_(.+)$/, async (ctx) => {
@@ -1824,6 +1890,17 @@ function setupAdminPanel(bot, fb, mdEscape) {
     if (!state || !(await isAdminOrStaff(ctx))) return false;
 
     const text = ctx.message.text.trim();
+
+    if (state.step === 'store_cat_add') {
+      try { const cat = await fb.createStoreCategory(text); delete adminState[ctx.from.id]; await ctx.reply(`✅ Category added: ${cat.name}`, adminBackButton('admin_categories')); }
+      catch (e) { await ctx.reply(`⚠️ ${e.message}`); }
+      return true;
+    }
+    if (state.step === 'store_cat_rename') {
+      try { const old = state.data.oldName; await fb.renameStoreCategory(old, text); delete adminState[ctx.from.id]; await ctx.reply(`✅ Category renamed: ${old} → ${text}`, adminBackButton('admin_categories')); }
+      catch (e) { await ctx.reply(`⚠️ ${e.message}`); }
+      return true;
+    }
 
     // ---- Per-field product edit ----
     if (state.step && state.step.startsWith('pedit_')) {
@@ -1968,16 +2045,11 @@ function setupAdminPanel(bot, fb, mdEscape) {
       return true;
     }
     if (state.step === 'bc_popup') {
-      state.data.isPopup = text.toLowerCase() === 'yes';
-      await fb.queueBroadcast({
-        message: state.data.message,
-        imageIds: state.data.imageId ? [state.data.imageId] : null,
-        fileIds: state.data.fileId ? [state.data.fileId] : null,
-        buttonText: state.data.buttonText || null, buttonUrl: state.data.buttonUrl || null,
-        isPopup: state.data.isPopup
-      });
-      delete adminState[ctx.from.id];
-      await ctx.reply('📢 Broadcast queued — sending to all users shortly.', Markup.removeKeyboard());
+      state.data.isPopup = text.toLowerCase() === 'yes'; state.step = 'bc_confirm';
+      const preview = `📢 *Broadcast Preview*\n\n${(state.data.message || '').slice(0, 700)}\n\n🖼 Photo: ${state.data.imageId ? 'Yes' : 'No'}\n📎 File: ${state.data.fileId ? 'Yes' : 'No'}\n🔗 Button: ${state.data.buttonText || 'No'}\n🔔 Popup: ${state.data.isPopup ? 'Yes' : 'No'}\n\nSend this broadcast to all registered users?`;
+      await ctx.reply(preview, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Confirm & Send', 'admin_bc_confirm'), Markup.button.callback('❌ Cancel', 'admin_bc_cancel')]
+      ]) });
       return true;
     }
 
@@ -2262,6 +2334,33 @@ function setupAdminPanel(bot, fb, mdEscape) {
     }
   }
 
+  async function sendProductCategoryPicker(ctx, state) {
+    const categories = await fb.getAllCategories();
+    state.data.categoryOptions = categories;
+    const rows = categories.map((name, i) => [Markup.button.callback(`📁 ${name}`.slice(0, 60), `admin_prodcat_${i}`)]);
+    rows.push([Markup.button.callback('➕ Add New Category', 'admin_prodcat_new')]);
+    rows.push([Markup.button.callback('✍️ Type category manually', 'admin_prodcat_manual')]);
+    await ctx.reply(`Step 3/8 — Category choose karo:${state.data.isEdit ? `\nCurrent: ${state.data.category || '-'}` : ''}`, Markup.inlineKeyboard(rows));
+  }
+  bot.action(/^admin_prodcat_(\d+)$/, async ctx => {
+    const state = adminState[ctx.from.id];
+    if (!state || state.step !== 'prod_category') return ctx.answerCbQuery('Product wizard expire ho gaya.');
+    const category = (state.data.categoryOptions || [])[Number(ctx.match[1])];
+    if (!category) return ctx.answerCbQuery('Category nahi mili.');
+    await ctx.answerCbQuery(`Selected: ${category}`); state.data.category = category; state.step = 'prod_description';
+    await ctx.reply('Step 4/8 — Description? (or "skip")');
+  });
+  bot.action('admin_prodcat_new', async ctx => {
+    const state = adminState[ctx.from.id];
+    if (!state || state.step !== 'prod_category') return ctx.answerCbQuery('Product wizard expire ho gaya.');
+    await ctx.answerCbQuery(); state.step = 'prod_category_new'; await ctx.reply('New category name bhejo (1-50 characters):');
+  });
+  bot.action('admin_prodcat_manual', async ctx => {
+    const state = adminState[ctx.from.id];
+    if (!state || state.step !== 'prod_category') return ctx.answerCbQuery('Product wizard expire ho gaya.');
+    await ctx.answerCbQuery(); await ctx.reply('Category name type karo:');
+  });
+
   // ---- Product add/edit wizard steps ----
   async function handleProductWizard(ctx, state, text) {
     const skip = text.toLowerCase() === 'skip' && state.data.isEdit;
@@ -2280,12 +2379,21 @@ function setupAdminPanel(bot, fb, mdEscape) {
           state.data.price = price;
         }
         state.step = 'prod_category';
-        await ctx.reply(`Step 3/8 — Category?${state.data.isEdit ? ` Current: ${state.data.category}` : ''}`);
+        await sendProductCategoryPicker(ctx, state);
+        return true;
+      }
+
+      case 'prod_category_new': {
+        try {
+          const cat = await fb.createStoreCategory(text);
+          state.data.category = cat.name; state.step = 'prod_description';
+          await ctx.reply(`✅ Category selected: ${cat.name}\nStep 4/8 — Description? (or "skip")`);
+        } catch (e) { await ctx.reply(`⚠️ ${e.message}`); }
         return true;
       }
 
       case 'prod_category':
-        if (!skip) state.data.category = text;
+        if (!skip) { state.data.category = text.trim(); await fb.createStoreCategory(state.data.category); }
         state.step = 'prod_description';
         await ctx.reply('Step 4/8 — Description? (or "skip")');
         return true;
