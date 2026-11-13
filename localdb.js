@@ -40,7 +40,8 @@ const FILES = {
   featureMeta: 'featureMeta.json',
   developers: 'developers.json',
   devCategories: 'devCategories.json',
-  paymentSettings: 'paymentSettings.json'
+  paymentSettings: 'paymentSettings.json',
+  storeCategories: 'storeCategories.json'
 };
 
 // ---- Low-level file read/write with an in-process write queue so
