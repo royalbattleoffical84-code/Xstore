@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
+const { createCustomEmojiSupport } = require('./customEmoji');
 const express = require('express');
 const fb = require('./localdb');
 const fampay = require('./fampay');
@@ -8,7 +9,6 @@ const { setupStaffApply } = require('./staffApply');
 const { setupFeatures } = require('./features');
 const { setupDevelopers } = require('./developers');
 const ui = require('./ui');
-const { installCustomEmojiSupport } = require('./custom-emoji');
 
 // ---- Persistent storage: restore data from Supabase/Firebase BEFORE serving anything ----
 // (Render's disk is wiped on every deploy; see storage.js). Everything that reads
@@ -26,8 +26,9 @@ storageReady.catch((err) => {
 const { setupMiniApp } = require('./miniapp-api');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-// Adds MessageEntityCustomEmoji to plain-text Telegram messages/captions globally.
-installCustomEmojiSupport(bot.telegram);
+// Apply custom emoji formatting centrally so welcome, admin, broadcast,
+// notification, and feature messages all use the same configured emoji map.
+createCustomEmojiSupport(bot.telegram);
 const app = express();
 app.use(express.json());
 
