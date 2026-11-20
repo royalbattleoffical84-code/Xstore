@@ -1,6 +1,5 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
-const { createCustomEmojiSupport } = require('./customEmoji');
 const express = require('express');
 const fb = require('./localdb');
 const fampay = require('./fampay');
@@ -26,10 +25,75 @@ storageReady.catch((err) => {
 const { setupMiniApp } = require('./miniapp-api');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-// Apply custom emoji formatting centrally so welcome, admin, broadcast,
-// notification, and feature messages all use the same configured emoji map.
-createCustomEmojiSupport(bot.telegram);
 const app = express();
+
+// ---- Telegram custom emoji pack importer ----
+// Reads the selected custom-emoji set from Telegram and builds an emoji -> ID map.
+// The set name is taken from the supplied t.me/addemoji/<name> link.
+const CUSTOM_EMOJI_SET_NAME = (process.env.CUSTOM_EMOJI_SET_NAME || 'DSPSIR_by_TgEmojis_bot').trim();
+let customEmojiMap = {};
+let customEmojiPackLoadPromise = null;
+async function loadCustomEmojiPack() {
+  if (customEmojiPackLoadPromise) return customEmojiPackLoadPromise;
+  customEmojiPackLoadPromise = (async () => {
+    try {
+      const set = await bot.telegram.getStickerSet(CUSTOM_EMOJI_SET_NAME);
+      const imported = {};
+      for (const sticker of (set.stickers || [])) {
+        if (sticker && sticker.emoji && sticker.custom_emoji_id) imported[sticker.emoji] = String(sticker.custom_emoji_id);
+      }
+      // Optional manual mappings override imported pack entries.
+      try {
+        const manual = JSON.parse(process.env.CUSTOM_EMOJI_MAP || '{}');
+        if (manual && typeof manual === 'object' && !Array.isArray(manual)) Object.assign(imported, manual);
+      } catch (e) {
+        console.warn('⚠️ CUSTOM_EMOJI_MAP is not valid JSON; using imported pack only.');
+      }
+      customEmojiMap = imported;
+      console.log(`✅ Custom emoji pack loaded: ${set.title || CUSTOM_EMOJI_SET_NAME} (${Object.keys(customEmojiMap).length} mappings)`);
+      return customEmojiMap;
+    } catch (err) {
+      console.warn(`⚠️ Could not load custom emoji pack "${CUSTOM_EMOJI_SET_NAME}": ${err.message}`);
+      // Keep manual mappings usable even if the pack lookup fails.
+      try {
+        const manual = JSON.parse(process.env.CUSTOM_EMOJI_MAP || '{}');
+        if (manual && typeof manual === 'object' && !Array.isArray(manual)) customEmojiMap = manual;
+      } catch (e) {}
+      return customEmojiMap;
+    }
+  })();
+  return customEmojiPackLoadPromise;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function welcomeAsHtmlWithCustomEmojis(text) {
+  // The default welcome template uses Telegram Markdown's *bold* markers.
+  let html = escapeHtml(text).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+  const entries = Object.entries(customEmojiMap).filter(([emoji, id]) => emoji && id)
+    .sort((a, b) => b[0].length - a[0].length);
+  for (const [emoji, id] of entries) {
+    const escaped = emoji.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    html = html.replace(new RegExp(escaped, 'g'), `<tg-emoji emoji-id="${String(id).replace(/[^0-9]/g, '')}">${escapeHtml(emoji)}</tg-emoji>`);
+  }
+  return html;
+}
+async function replyWelcome(ctx, text, extra = {}) {
+  await loadCustomEmojiPack();
+  const payload = { ...extra, parse_mode: 'HTML' };
+  const html = welcomeAsHtmlWithCustomEmojis(text);
+  if (ctx.callbackQuery) {
+    try {
+      const edited = await ctx.editMessageText(html, payload);
+      return typeof edited === 'object' ? edited : ctx.callbackQuery.message;
+    } catch (err) {
+      try { await ctx.deleteMessage(); } catch (e) {}
+    }
+  }
+  return ctx.reply(html, payload);
+}
+
 app.use(express.json());
 
 // In-memory temp state (for multi-step flows like "buy via wallet confirm")
@@ -326,7 +390,7 @@ async function sendMainMenu(ctx) {
   const settings = await fb.getBotSettings();
   const text = settings.welcomeMessage.replace('{name}', ctx.from.first_name);
 
-  await smartReply(ctx, text, mainMenu(settings, await getMenuFlags(ctx.from.id)));
+  await replyWelcome(ctx, text, mainMenu(settings, await getMenuFlags(ctx.from.id)));
 }
 
 // Sends a fresh main menu to a user who isn't the one currently chatting
@@ -336,8 +400,8 @@ async function sendMainMenuToUser(userId) {
   const u = await fb.getUser(String(userId));
   const text = settings.welcomeMessage.replace('{name}', (u && u.name) || '');
   const extra = mainMenu(settings, await getMenuFlags(userId));
-  try { await bot.telegram.sendMessage(userId, text, { parse_mode: 'Markdown', ...extra }); }
-  catch (e) { await bot.telegram.sendMessage(userId, text, extra); }
+  await loadCustomEmojiPack();
+  await bot.telegram.sendMessage(userId, welcomeAsHtmlWithCustomEmojis(text), { parse_mode: 'HTML', ...extra });
 }
 
 // Default labels for the built-in menu buttons — admin can override any of

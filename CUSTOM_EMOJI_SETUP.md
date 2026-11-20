@@ -1,37 +1,30 @@
 # Telegram Premium Custom Emoji Setup
 
-The bot now has centralized custom-emoji formatting for Telegram text and caption API calls made through the shared Telegraf client. It covers `ctx.reply`, `ctx.editMessageText`, `bot.telegram.sendMessage`, photo/document/video captions, and broadcast/notification messages when those calls use the shared bot instance.
+The bot can import a Telegram custom-emoji pack at runtime and use matching emojis in the welcome message.
 
-## Render environment variable
+## Render environment variables
 
-Add exactly one variable:
+Add:
 
-- **Key:** `CUSTOM_EMOJI_MAP`
-- **Value before you collect IDs:** `{}`
+- `CUSTOM_EMOJI_SET_NAME` = `DSPSIR_by_TgEmojis_bot`
+- `CUSTOM_EMOJI_MAP` = `{}` (optional; use this only for manual overrides)
 
-After collecting real IDs, set a JSON object where each key is the exact emoji character and each value is its numeric `custom_emoji_id`. Example (IDs below are placeholders):
-
-```json
-{"⭐":"YOUR_NUMERIC_EMOJI_ID","🔥":"YOUR_OTHER_NUMERIC_EMOJI_ID","💎":"YOUR_DIAMOND_EMOJI_ID"}
-```
-
-Replace every placeholder with the real numeric ID. Do not include comments or trailing commas; the value must be valid JSON.
+The set name is the part after `https://t.me/addemoji/` in the pack link. Do not include the full URL.
 
 ## How it works
 
-- Plain text is HTML-escaped safely and sent in Telegram HTML mode when a mapped emoji is present.
-- Existing legacy `parse_mode: Markdown` messages are converted from inline Markdown to HTML before the custom emoji tag is inserted.
-- Existing HTML messages keep their HTML and receive the custom emoji tag.
-- Messages with pre-existing `entities` / `caption_entities` are left unchanged so their UTF-16 entity offsets are not corrupted.
-- `MarkdownV2` messages are left unchanged to avoid breaking their distinct escaping rules.
-- Inline keyboard button labels and callback-query alert text are not changed: Telegram does not support custom-emoji entities in those fields in the same way as message text.
+When a welcome message is sent, the bot calls Telegram's `getStickerSet` API, reads each sticker's `emoji` and `custom_emoji_id`, and builds a mapping automatically. Matching emoji characters in the welcome message are rendered with Telegram's `<tg-emoji>` HTML entity. Manual entries in `CUSTOM_EMOJI_MAP` override imported entries.
 
-## Deploy
+Example manual override:
 
-1. Upload all updated project files to the same GitHub repository used by Render.
-2. Render installs `markdown-it` automatically from `package.json` during its normal build/install step.
-3. Add `CUSTOM_EMOJI_MAP` in Render → your service → Environment.
-4. Save and redeploy.
-5. Check logs for `Custom emoji support ready (N mapping(s)).`
+```json
+{"✅":"6156939810427640445"}
+```
 
-If the map is `{}`, support is installed but no premium emoji substitutions will occur. Use IDs extracted from actual Telegram messages containing custom emoji entities. Keep your `BOT_TOKEN` and other secrets private.
+## Important
+
+- Only emoji characters that exist in the selected pack and exactly match characters in the welcome text can be replaced.
+- The pack is fetched by the bot at runtime; this ZIP cannot verify the pack's contents without the bot token.
+- The bot account owner must meet Telegram's custom-emoji sending eligibility requirements.
+- This change applies to the welcome message send paths. It does not automatically rewrite every unrelated message in the project or keyboard button labels.
+- Check Render logs for `Custom emoji pack loaded` or `Could not load custom emoji pack` after testing `/start`.
